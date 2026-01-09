@@ -237,7 +237,7 @@ AGE_OPTIONS = ["비밀", "20대", "30대", "40대", "50대", "60대", "70대"]
 RACKET_OPTIONS = ["모름", "기타", "윌슨", "요넥스", "헤드", "바볼랏", "던롭", "뵐클", "테크니파이버", "프린스"]
 GENDER_OPTIONS = ["남", "여"]
 HAND_OPTIONS = ["오른손", "왼손"]
-GROUP_OPTIONS = ["미배정(게스트)", "A조", "B조"]
+GROUP_OPTIONS = ["미배정(게스트)", "A조", "B조", "C조"]
 NTRP_OPTIONS = ["모름"] + [f"{x/10:.1f}" for x in range(10, 71)]  # 1.0~7.0 (0.1 step)
 COURT_TYPES = ["인조잔디", "하드", "클레이"]
 SIDE_OPTIONS = ["포(듀스)", "백(애드)"]
@@ -2837,7 +2837,7 @@ with tab1:
             new_name = st.text_input("이름", key="new_name")
             new_age = st.selectbox("나이대", AGE_OPTIONS, index=0, key="new_age")
             new_racket = st.selectbox("라켓", RACKET_OPTIONS, index=0, key="new_racket")
-            new_group = st.selectbox("조별 (A/B)", GROUP_OPTIONS, index=0, key="new_group")
+            new_group = st.selectbox("조별 (A/B/C)", GROUP_OPTIONS, index=0, key="new_group")
         with c2:
             new_gender = st.selectbox("성별", GENDER_OPTIONS, index=0, key="new_gender")
             new_hand = st.selectbox("주로 쓰는 손", HAND_OPTIONS, index=0, key="new_hand")
@@ -6601,4 +6601,3 @@ with tab5:
                     """,
                     unsafe_allow_html=True,
                 )
-
