@@ -2837,7 +2837,7 @@ with tab1:
             new_name = st.text_input("이름", key="new_name")
             new_age = st.selectbox("나이대", AGE_OPTIONS, index=0, key="new_age")
             new_racket = st.selectbox("라켓", RACKET_OPTIONS, index=0, key="new_racket")
-            new_group = st.selectbox("실력조 (A/B/C)", GROUP_OPTIONS, index=0, key="new_group")
+            new_group = st.selectbox("조별 (A/B)", GROUP_OPTIONS, index=0, key="new_group")
         with c2:
             new_gender = st.selectbox("성별", GENDER_OPTIONS, index=0, key="new_gender")
             new_hand = st.selectbox("주로 쓰는 손", HAND_OPTIONS, index=0, key="new_hand")
@@ -6601,3 +6601,4 @@ with tab5:
                     """,
                     unsafe_allow_html=True,
                 )
+
