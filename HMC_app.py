@@ -15,7 +15,7 @@ import plotly.express as px
 # Streamlit 초기화 (✅ 딱 1번만 / 제일 위에서)
 # ---------------------------------------------------------
 st.set_page_config(
-    page_title="HANMIMOS matching assistante HMA (Beta)",
+    page_title="HANMIMOS 게임 도우미 (Beta)",
     layout="centered",
     initial_sidebar_state="collapsed",
 )
@@ -230,14 +230,14 @@ st.markdown("""
 # ---------------------------------------------------------
 # 기본 상수
 # ---------------------------------------------------------
-PLAYERS_FILE = "players.json"
-SESSIONS_FILE = "sessions.json"
+PLAYERS_FILE = "HMC_players.json"
+SESSIONS_FILE = "HMC_sessions.json"
 
 AGE_OPTIONS = ["비밀", "20대", "30대", "40대", "50대", "60대", "70대"]
 RACKET_OPTIONS = ["모름", "기타", "윌슨", "요넥스", "헤드", "바볼랏", "던롭", "뵐클", "테크니파이버", "프린스"]
 GENDER_OPTIONS = ["남", "여"]
 HAND_OPTIONS = ["오른손", "왼손"]
-GROUP_OPTIONS = ["미배정(게스트)", "A조", "B조", "C조"]
+GROUP_OPTIONS = ["미배정(게스트)", "A조", "B조"]
 NTRP_OPTIONS = ["모름"] + [f"{x/10:.1f}" for x in range(10, 71)]  # 1.0~7.0 (0.1 step)
 COURT_TYPES = ["인조잔디", "하드", "클레이"]
 SIDE_OPTIONS = ["포(듀스)", "백(애드)"]
@@ -799,18 +799,17 @@ def fix_mixed_team_if_needed(t1, t2, meta):
     return t1, t2
 
 
-def normalize_mixed_schedule(schedule, meta):
+def normalize_mixed_schedule(schedule, meta, enabled: bool = False):
     """
     schedule 전체를 훑어서
-    혼합복식에서 발생하는
-    '남남 vs 여여' 케이스를 자동 교정
+    혼합복식에서 발생하는 '남남 vs 여여' 케이스를 자동 교정
+    ✅ enabled=True 일 때만 적용 (혼복에서만!)
     """
-    if not schedule:
+    if (not enabled) or (not schedule):
         return schedule
 
     fixed = []
     for gtype_each, t1, t2, court in schedule:
-        # 여기서 gtype 문자열 의존 안 함!
         nt1, nt2 = fix_mixed_team_if_needed(t1, t2, meta)
         fixed.append((gtype_each, nt1, nt2, court))
 
@@ -936,124 +935,394 @@ def get_total_games_by_player(sessions):
 # ---------------------------------------------------------
 # 대진 생성
 # ---------------------------------------------------------
+def build_mixed_doubles_schedule_strict(
+    players,
+    max_games,
+    court_count,
+    roster_by_name,
+    use_ntrp=False,
+    group_only=False,
+    tries_per_match=180,
+):
+    import random
+
+    def _gender(name: str) -> str:
+        return roster_by_name.get(name, {}).get("gender", "남")
+
+    def _ntrp(name: str):
+        v = roster_by_name.get(name, {}).get("ntrp", None)
+        try:
+            return None if v in (None, "", "모름") else float(v)
+        except Exception:
+            return None
+
+    if group_only:
+        players = [p for p in players if roster_by_name.get(p, {}).get("group") in ("A조", "B조")]
+
+    men = [p for p in players if _gender(p) == "남"]
+    women = [p for p in players if _gender(p) == "여"]
+
+    # 혼복은 한 경기당 남2+여2 필요
+    if len(men) < 2 or len(women) < 2:
+        return []
+
+    counts = {p: 0 for p in players}
+    partners_hist = set()   # frozenset({a,b})
+    opponents_hist = set()  # frozenset({a,b})
+
+    schedule = []
+    no_progress = 0
+
+    while True:
+        if all(counts.get(p, 0) >= int(max_games) for p in players):
+            break
+
+        round_used = set()
+        made_any = False
+
+        for court in range(1, int(court_count) + 1):
+            avail_m = [p for p in men if counts[p] < int(max_games) and p not in round_used]
+            avail_w = [p for p in women if counts[p] < int(max_games) and p not in round_used]
+            if len(avail_m) < 2 or len(avail_w) < 2:
+                continue
+
+            best = None  # (score, t1, t2)
+
+            for _ in range(int(tries_per_match)):
+                ms = random.sample(avail_m, 2)
+                ws = random.sample(avail_w, 2)
+
+                pairings = [
+                    ([ms[0], ws[0]], [ms[1], ws[1]]),
+                    ([ms[0], ws[1]], [ms[1], ws[0]]),
+                ]
+
+                for t1, t2 in pairings:
+                    # ✅ 팀은 무조건 남+여
+                    if not (_gender(t1[0]) != _gender(t1[1]) and _gender(t2[0]) != _gender(t2[1])):
+                        continue
+
+                    score = 0.0
+
+                    # 1) 파트너 중복 강패널티
+                    score += 200 if frozenset(t1) in partners_hist else 0
+                    score += 200 if frozenset(t2) in partners_hist else 0
+
+                    # 2) 상대 중복 패널티
+                    for a in t1:
+                        for b in t2:
+                            score += 25 if frozenset((a, b)) in opponents_hist else 0
+
+                    # 3) 덜 뛴 사람 우선
+                    score += 2.0 * (counts[t1[0]] + counts[t1[1]] + counts[t2[0]] + counts[t2[1]])
+
+                    # 4) NTRP 밸런스 (옵션)
+                    if use_ntrp:
+                        n1 = [(_ntrp(x) if _ntrp(x) is not None else 3.0) for x in t1]
+                        n2 = [(_ntrp(x) if _ntrp(x) is not None else 3.0) for x in t2]
+                        score += 12.0 * abs((sum(n1)/2.0) - (sum(n2)/2.0))
+
+                    score += random.random() * 0.01
+
+                    if best is None or score < best[0]:
+                        best = (score, t1, t2)
+
+            if best is None:
+                continue
+
+            _, t1, t2 = best
+            schedule.append(("복식", t1, t2, court))
+            round_used.update(t1 + t2)
+
+            partners_hist.add(frozenset(t1))
+            partners_hist.add(frozenset(t2))
+            for a in t1:
+                for b in t2:
+                    opponents_hist.add(frozenset((a, b)))
+
+            for p in t1 + t2:
+                counts[p] += 1
+
+            made_any = True
+
+        if not made_any:
+            no_progress += 1
+            if no_progress >= 2:
+                break
+        else:
+            no_progress = 0
+
+    return schedule
+
+
+from itertools import combinations
+from collections import defaultdict
+import random
+import math
+
 def build_doubles_schedule(players, max_games, court_count, mode,
                            use_ntrp, group_only, roster_by_name,
                            relaxed_mixed=False):
     """
-    복식 스케줄러
-    - 파트너/상대 중복 최소화
-    - relaxed_mixed=True 이고 mode=="혼합복식" 이면
-      → 2남2녀(혼복)을 우선적으로 선택하지만, 꼭 지키지 않아도 되도록 완화
+    복식 스케줄러 (랜덤/동성)
+    - 라운드 단위 생성 (라운드 내 선수 중복 금지)
+    - 파트너/상대 중복 강벌점
+    - ✅ 게임 간격 균등(앞/중간/뒤 몰림 방지)
+      1) 연속 출전/짧은 휴식 강벌점
+      2) 진행 페이스(초반 과다 / 후반 몰빵) 벌점
+    - use_ntrp=True면 팀 평균 NTRP 밸런스 반영
+
+    혼합복식은 strict 함수로 위임.
     """
+
+    # ✅ 혼합복식은 별도 strict로
+    if mode == "혼합복식":
+        return build_mixed_doubles_schedule_strict(
+            players=players,
+            max_games=max_games,
+            court_count=court_count,
+            roster_by_name=roster_by_name,
+            use_ntrp=use_ntrp,
+            group_only=group_only,
+        )
+
     if len(players) < 4:
         return []
 
-    meta = {p: roster_by_name.get(p, {}) for p in players}
-    genders = {p: meta[p].get("gender") for p in players}
-    groups = {p: meta[p].get("group", "미배정") for p in players}
+    max_games = int(max_games)
+    court_count = int(court_count)
 
+    meta = {p: roster_by_name.get(p, {}) for p in players}
+    genders = {p: meta[p].get("gender", "남") for p in players}
+    groups  = {p: meta[p].get("group", "미배정") for p in players}
+
+    def ntrp_of(p):
+        v = meta[p].get("ntrp", None)
+        try:
+            return None if v in (None, "", "모름") else float(v)
+        except Exception:
+            return None
+
+    def pair_key(a, b):
+        return tuple(sorted((a, b)))
+
+    def team_avg_ntrp(team):
+        vals = []
+        for p in team:
+            v = ntrp_of(p)
+            if v is not None:
+                vals.append(v)
+        return sum(vals) / len(vals) if vals else 0.0
+
+    # 누적 상태
     games_played = {p: 0 for p in players}
-    partner_counts = defaultdict(int)   # (a, b) 같은 팀
-    opponent_counts = defaultdict(int)  # (a, b) 서로 상대
+    partner_counts  = defaultdict(int)
+    opponent_counts = defaultdict(int)
+
+    last_partner = {p: None for p in players}
+    last_opps    = {p: set() for p in players}
+
+    # ✅ 간격 균등용: 마지막으로 출전한 라운드
+    last_round_played = {p: -999 for p in players}
 
     schedule = []
 
-    def can_team(team4):
-        # 조별 매칭 제한 (이미 그룹을 나눠서 들어왔다면 group_only=False 로 호출)
+    # -----------------------
+    # ✅ 가중치(원하면 조절)
+    # -----------------------
+    W_PARTNER   = 30.0   # 파트너 중복(제곱벌점)
+    W_OPP       = 12.0   # 상대 중복(제곱벌점)
+    W_RECENT_P  = 60.0   # 바로 직전 파트너 강벌
+    W_RECENT_O  = 22.0   # 바로 직전 상대 벌
+
+    W_FAIR      = 16.0   # 게임수 편차(전체 spread)
+    W_NTRP      = 6.0    # 팀 평균 NTRP 밸런스
+
+    # ✅ 간격 균등 핵심 가중치
+    W_GAP_1     = 120.0  # 연속 라운드 출전(휴식 0) 매우 강벌
+    W_GAP_2     = 45.0   # 한 라운드 쉬고 또 출전(휴식 1) 중벌
+    W_PACE      = 18.0   # 초반 과다/후반 몰빵(페이스) 제어
+
+    def can_use_four(four):
+        # 조별 제한
         if group_only:
-            if len({groups[x] for x in team4}) > 1:
+            if len({groups[x] for x in four}) > 1:
                 return False
 
-        # 동성복식
+        # 동성복식: 4명 모두 같은 성별
         if mode == "동성복식":
-            if len({genders[x] for x in team4}) > 1:
-                return False
-
-        # 혼합복식 (strict 모드에서만 강제)
-        if mode == "혼합복식" and not relaxed_mixed:
-            males = [x for x in team4 if genders[x] == "남"]
-            females = [x for x in team4 if genders[x] == "여"]
-            if len(males) < 2 or len(females) < 2:
+            if len({genders[x] for x in four}) > 1:
                 return False
 
         return True
 
-    total_games = (len(players) * max_games) // 4
-    tries = 0
-    while len(schedule) < total_games and tries < total_games * 80:
-        tries += 1
-        available = [p for p in players if games_played[p] < max_games]
-        if len(available) < 4:
+    # ✅ 총 라운드 "예상치" (페이스 계산용)
+    total_slots_needed = len(players) * max_games  # 4인슬롯 기준
+    matches_needed = math.ceil(total_slots_needed / 4)
+    total_rounds_est = max(1, math.ceil(matches_needed / max(1, court_count)))
+
+    def gap_penalty(p, round_no):
+        gap = round_no - last_round_played.get(p, -999)
+        if gap == 1:
+            return W_GAP_1
+        if gap == 2:
+            return W_GAP_2
+        return 0.0
+
+    def pace_penalty(p, round_no, will_play=True):
+        """
+        round_no 진행 시점에서, 이 선수가 너무 빨리 많이 뛰면 벌점,
+        너무 늦게 몰리면(뒤에서 급하게) 자동으로 끌어오도록 유도.
+        """
+        # 이상적인 누적 경기수(대략)
+        expected = max_games * (round_no / float(total_rounds_est))
+        actual = games_played[p] + (1 if will_play else 0)
+
+        # actual이 expected보다 많이 앞서면 벌점
+        diff = actual - expected
+
+        # 0.6 정도는 자연스러운 오차로 허용
+        if diff > 0.6:
+            return (diff - 0.6) * W_PACE
+        return 0.0
+
+    def score_pairing(t1, t2, round_no):
+        a, b = t1
+        c, d = t2
+        s = 0.0
+
+        # 파트너 중복 (제곱 벌점)
+        p1 = pair_key(a, b)
+        p2 = pair_key(c, d)
+        s += (partner_counts[p1] ** 2) * W_PARTNER
+        s += (partner_counts[p2] ** 2) * W_PARTNER
+
+        # 최근 파트너 강벌
+        if last_partner.get(a) == b or last_partner.get(b) == a:
+            s += W_RECENT_P
+        if last_partner.get(c) == d or last_partner.get(d) == c:
+            s += W_RECENT_P
+
+        # 상대 중복(크로스 4개)
+        cross = [(a, c), (a, d), (b, c), (b, d)]
+        for x, y in cross:
+            s += (opponent_counts[pair_key(x, y)] ** 2) * W_OPP
+            if y in last_opps.get(x, set()):
+                s += W_RECENT_O
+
+        # ✅ 간격 균등(연속 출전/짧은 휴식 벌점 + 페이스 벌점)
+        for p in (a, b, c, d):
+            s += gap_penalty(p, round_no)
+            s += pace_penalty(p, round_no, will_play=True)
+
+        # 게임수 편차(이 4명이 1게임 더 했다고 가정했을 때 spread)
+        proj = dict(games_played)
+        for p in (a, b, c, d):
+            proj[p] += 1
+        s += (max(proj.values()) - min(proj.values())) * W_FAIR
+
+        # NTRP 밸런스(옵션)
+        if use_ntrp:
+            s += abs(team_avg_ntrp(t1) - team_avg_ntrp(t2)) * W_NTRP
+
+        return s
+
+    # -----------------------
+    # ✅ 라운드 단위로 생성
+    # -----------------------
+    round_no = 0
+    while True:
+        eligible = [p for p in players if games_played[p] < max_games]
+        if len(eligible) < 4:
             break
 
-        # NTRP 적용
-        if use_ntrp:
-            available.sort(key=lambda x: get_ntrp_value(meta[x]))
-        random.shuffle(available)
+        round_no += 1
+        used_in_round = set()
+        made_any = False
 
-        picked = None
-        best_score = 1e9
-
-        for i in range(len(available) - 3):
-            cand = available[i:i+4]
-            if not can_team(cand):
-                continue
-
-            perms = [(0, 1, 2, 3), (0, 2, 1, 3), (0, 3, 1, 2)]
-            for a, b, c, d in perms:
-                p1, p2, p3, p4 = cand[a], cand[b], cand[c], cand[d]
-
-                key_t1 = tuple(sorted((p1, p2)))
-                key_t2 = tuple(sorted((p3, p4)))
-                partner_score = partner_counts[key_t1] + partner_counts[key_t2]
-
-                opp_pairs = [
-                    tuple(sorted((p1, p3))), tuple(sorted((p1, p4))),
-                    tuple(sorted((p2, p3))), tuple(sorted((p2, p4))),
-                ]
-                opp_score = sum(opponent_counts[k] for k in opp_pairs)
-
-                # ★ 혼복 완화 모드일 때: 2남2녀가 아니면 약간 페널티
-                gender_score = 0
-                if mode == "혼합복식" and relaxed_mixed:
-                    males = sum(1 for x in [p1, p2, p3, p4] if genders[x] == "남")
-                    females = sum(1 for x in [p1, p2, p3, p4] if genders[x] == "여")
-                    if not (males == 2 and females == 2):
-                        gender_score = 5  # 숫자 클수록 혼복 형태를 더 강하게 선호
-
-                total_score = partner_score * 2 + opp_score + gender_score
-
-                if total_score < best_score:
-                    best_score = total_score
-                    picked = (p1, p2, p3, p4)
-
-            if picked is not None:
+        for court in range(1, court_count + 1):
+            avail = [p for p in eligible if p not in used_in_round and games_played[p] < max_games]
+            if len(avail) < 4:
                 break
 
-        if not picked:
-            continue
+            # ✅ 게임수 적은 사람 우선 + 랜덤 섞음
+            avail.sort(key=lambda p: (games_played[p], random.random()))
 
-        p1, p2, p3, p4 = picked
-        t1, t2 = [p1, p2], [p3, p4]
+            # 후보풀 크게 잡기
+            POOL_N = min(len(avail), 18)
+            pool = avail[:POOL_N]
 
-        for p in t1 + t2:
-            games_played[p] += 1
+            best = None
+            best_score = float("inf")
 
-        partner_counts[tuple(sorted((p1, p2)))] += 1
-        partner_counts[tuple(sorted((p3, p4)))] += 1
+            for four in combinations(pool, 4):
+                if not can_use_four(four):
+                    continue
 
-        for a in t1:
-            for b in t2:
-                opponent_counts[tuple(sorted((a, b)))] += 1
+                a, b, c, d = four
+                pairings = [
+                    ([a, b], [c, d]),
+                    ([a, c], [b, d]),
+                    ([a, d], [b, c]),
+                ]
 
-        schedule.append(("복식", t1, t2, None))
+                for t1, t2 in pairings:
+                    sc = score_pairing(t1, t2, round_no)
+                    if sc < best_score:
+                        best_score = sc
+                        best = (t1, t2)
 
-    # 코트 배정
-    for i, (gtype, t1, t2, _) in enumerate(schedule):
-        court = (i % court_count) + 1
-        schedule[i] = (gtype, t1, t2, court)
+            # pool에서 못 찾으면 avail 전체로 확장(특히 동성)
+            if best is None and len(avail) <= 22:
+                for four in combinations(avail, 4):
+                    if not can_use_four(four):
+                        continue
+                    a, b, c, d = four
+                    pairings = [
+                        ([a, b], [c, d]),
+                        ([a, c], [b, d]),
+                        ([a, d], [b, c]),
+                    ]
+                    for t1, t2 in pairings:
+                        sc = score_pairing(t1, t2, round_no)
+                        if sc < best_score:
+                            best_score = sc
+                            best = (t1, t2)
+
+            if best is None:
+                continue
+
+            t1, t2 = best
+            schedule.append(("복식", t1, t2, court))
+            made_any = True
+
+            # 상태 업데이트
+            for p in (t1 + t2):
+                games_played[p] += 1
+                used_in_round.add(p)
+                last_round_played[p] = round_no  # ✅ 라운드 기록
+
+            partner_counts[pair_key(t1[0], t1[1])] += 1
+            partner_counts[pair_key(t2[0], t2[1])] += 1
+
+            for x in t1:
+                for y in t2:
+                    opponent_counts[pair_key(x, y)] += 1
+
+            last_partner[t1[0]] = t1[1]
+            last_partner[t1[1]] = t1[0]
+            last_partner[t2[0]] = t2[1]
+            last_partner[t2[1]] = t2[0]
+
+            last_opps[t1[0]] = set(t2)
+            last_opps[t1[1]] = set(t2)
+            last_opps[t2[0]] = set(t1)
+            last_opps[t2[1]] = set(t1)
+
+        if not made_any:
+            break
+
     return schedule
-
 
 def build_singles_schedule(players, max_games, court_count, mode,
                            use_ntrp, group_only, roster_by_name):
@@ -1134,81 +1403,40 @@ def get_daily_fortune(sel_player):
     import datetime
 
     fortune_messages = [
-    "(주손)잡이가 귀인이다.",
-    "(주손)잡이를 조심하라.",
-    "이름에 '(자음)' 이 들어가는 사람을 조심하라.",
-    "이름에 '(자음)' 이 들어가는 사람이 귀인이다.",
-    "(라켓)을(를) 든 사람이 귀인이다.",
-    "(라켓)을(를) 든 사람을 조심하라.",
-    "(연령대)가 귀인이다.",
-    "(연령대)를 조심하라.",
-    "애드(백)사이드가 복을 가져다 준다.",
-    "듀스(포)사이드가 복을 가져다 준다.",
-    "네트 플레이가 행운을 부른다. 과감하게 전진하라.",
-    "심호흡이 오늘의 MVP다. 급하면 진다.",
-    "볼 줍다가 인생의 기회를 주운다. 허리 조심해라.",
-    "오늘의 라이벌은 가장 친한 사람이다. 조심하라.",
-    "안경을 쓴 사람이 귀인이다.",
-    "모자 쓴 사람과 팀이 되면 기회가 온다.",
-    "너무 잘하면 시기받는다. 적당히 해라.",
-    "로브는 오늘의 비책이다. 예상치 못한 순간 써라.",
-    "물 많이 마시는 사람과 팀이 되면 복이 따른다.",
-    "오늘은 '미안!'을 많이 해야 한다.",
-    "실수해도 괜찮다. 어차피 모두가 기억 못 한다. 네가 져도 아무도 관심 없다.",
-    "오늘 코트 라인은 네 편이 아니다. 걔는 그냥 선이다. 집착하지 마라.",
-    "스매시 하려다 미스샷 나면 멘탈 나간다. 그냥 하지 마라.",
-    "공 못 맞히면 핑계 준비해라. '바람 때문' 추천한다.",
-    "아웃인지 인인지 애매하면 그냥 네 점수라고 우겨라. 운도 뻔뻔한 사람 편이다.",
-    "랠리 길어지면 인생 생각하지 마라. 그냥 살아남아라.",
-    "공이 네 얼굴을 향하면 회피하지 마라. 운명의 싸움이다.",
-    "오늘은 코트에서 철학자 등장 가능. '테니스란 무엇인가' 생각 들면 졌다.",
-    "내가 왜 여기 있는지 모르겠으면 물 마셔라. 정신 돌아온다.",
-    "내가 실수하더라도 파트너 때문이라고 생각 해라.",
-    "테니스 별거 없다. 그냥 치자.",
-    "(프로선수) 빙의하는 날.",
-    "운세에 의지하지마라.",
-
-    "오늘 공은 네가 친 게 아니다. 공이 네 불안을 느끼고 도망간다. 잡아라.",
-    "스트링 텐션이 네 멘탈 텐션보다 높다. 마음을 조여라.",
-    "볼 줄 때 땅에 두 번 튕기면 안 된다. 오늘 운도 두 번 튕긴다.",
-    "파트너가 너한테 말 안 하면 잘하고 있는 거다. 말 많이 하면 망한 거다.",
-    "경기 중에 갑자기 평화가 온다면 그건 패배의 조짐이다.",
-    "승리는 공이 아니라 선택에서 나온다. 오늘은 선택이 문제다.",
-    "테니스는 인생이다. 걷어내는건 공이고 남는 건 너다.",
-    "실수는 문제가 아니다. 반복이 문제다. 조심해라.",
-    "포핸드는 태양, 백핸드는 달. 오늘 달이 뜬다.",
-    "네트는 벽이 아니다. 질문이다. 답을 내라.",
-    "라켓은 무기가 아니라 펜이다. 오늘 네 플레이로 이야기를 써라.",
-    "네트는 경계가 아니다. 연결이다. 넘어가는 순간 세상이 넓어진다.",
-    "스핀은 의심, 플랫은 확신. 오늘은 확신의 날이다.",
-    "테니스는 상대와의 싸움이 아니라 어제의 나와의 싸움이다.",
-    "볼의 속도는 마음의 속도를 닮는다. 조급하면 흔들린다.",
-    "그림자처럼 따라오는 실수에 흔들리지 마라. 오늘의 너는 빛이다.",
-    "승리는 외치는 것이 아니라, 조용히 만들어가는 것이다.",
-    "코트 위에서 가장 소중한 공간은 라인이 아니라 네 발 아래다.",
-    "오늘의 경기는 상대를 이기는 것이 아니라 자신을 이해하는 시간이다.",
-    "흘려보낸 볼을 잡으려 하지 마라. 지나간 시간은 다시 오지 않는다.",
-    "실수가 두려우면 발전도 없다. 오늘은 한 걸음 더 내딛는 날이다.",
-    "공은 돌아온다. 기회도 돌아온다.",
-    "바람이 변할 때 흔들리는 것은 공이 아니라 마음이다.",
-    "라켓을 무겁게 들지 마라. 무거운 것은 생각이다.",
-    "득점은 순간, 과정은 영원하다.",
-    "포기는 실패가 아니다. 멈춤은 선택이다.",
-    "라켓의 스윗스팟보다 중요한 것은 마음의 스윗스팟이다.",
-    "볼이 아닌 순간을 맞이하라. 그 순간이 승리를 만든다.",
-    "테니스는 반복의 예술이다. 어제의 스윙이 오늘의 음악이 된다.",
-    "오늘의 경기에서 가장 중요한 것은 점수가 아니라 태도다.",
-    "테니스는 혼자 하는 운동이지만, 함께 성장하는 여정이다.",
-    "해질 때 가장 길어지는 그림자처럼, 오늘의 경험은 오래 남을 것이다.",
-    "구름 뒤에 가려진 태양은 보이지 않아도 존재한다. 너의 가능성도 그렇다.",
-    "밤하늘의 별처럼, 작은 순간들이 전체를 밝힌다.",
-    "한 번 튄 공은 다시 돌아오지 않지만 울림은 남는다.",
-    "어둠이 길게 느껴질수록 새벽은 가까워진다.",
-    "공이 멀어질수록 시야를 넓혀라. 답은 가까이에 없다.",
-    "멈춘 순간에도 시간은 달린다. 네 마음도 그렇게 달려라.",
-    "충돌은 아픔이 아니라 방향 전환이다.",
-    "너의 오늘은 코트 위 별자리다. 연결하면 의미가 된다.",
-
+        "(주손)잡이가 귀인이다.",
+        "(주손)잡이를 조심하라.",
+        "이름에 '(자음)' 이 들어가는 사람을 조심하라.",
+        "이름에 '(자음)' 이 들어가는 사람이 귀인이다.",
+        "(라켓)을(를) 든 사람이 귀인이다.",
+        "(라켓)을(를) 든 사람을 조심하라.",
+        "(연령대)가 귀인이다.",
+        "(연령대)를 조심하라.",
+        "애드(백)사이드가 복을 가져다 준다.",
+        "듀스(포)사이드가 복을 가져다 준다.",
+        "네트 플레이가 행운을 부른다. 과감하게 전진하라.",
+        "심호흡이 오늘의 MVP다. 급하면 진다.",
+        "볼 줍다가 인생의 기회를 주운다. 허리 조심해라.",
+        "오늘의 라이벌은 가장 친한 사람이다. 조심하라.",
+        "안경을 쓴 사람이 귀인이다.",
+        "모자 쓴 사람과 팀이 되면 기회가 온다.",
+        "너무 잘하면 시기받는다. 적당히 해라.",
+        "로브는 오늘의 비책이다. 예상치 못한 순간 써라.",
+        "물 많이 마시는 사람과 팀이 되면 복이 따른다.",
+        "오늘은 '미안!'을 많이 해야 한다.",
+        "실수해도 괜찮다. 어차피 모두가 기억 못 한다. 네가 져도 아무도 관심 없다.",
+        "오늘 코트 라인은 네 편이 아니다. 걔는 그냥 선이다. 집착하지 마라.",
+        "스매시 하려다 미스샷 나면 멘탈 나간다. 그냥 하지 마라.",
+        "공 못 맞히면 핑계 준비해라. '바람 때문' 추천한다.",
+        "아웃인지 인인지 애매하면 그냥 네 점수라고 우겨라. 운도 뻔뻔한 사람 편이다.",
+        "랠리 길어지면 인생 생각하지 마라. 그냥 살아남아라.",
+        "공이 네 얼굴을 향하면 회피하지 마라. 운명의 싸움이다.",
+        "오늘은 코트에서 철학자 등장 가능. '테니스란 무엇인가' 생각 들면 졌다.",
+        "내가 왜 여기 있는지 모르겠으면 물 마셔라. 정신 돌아온다.",
+        "내가 실수하더라도 파트너 때문이라고 생각 해라.",
+        "테니스 별거 없다. 그냥 치자.",
+        "(프로선수) 빙의하는 날.",
+        "운세에 의지하지마라.",
+        "너의 오늘은 코트 위 별자리다. 연결하면 의미가 된다.",
     ]
 
     chosung = list("ㄱㄴㄷㄹㅁㅂㅅㅇㅈㅊㅎ")
@@ -1217,18 +1445,20 @@ def get_daily_fortune(sel_player):
     hands = ["오른손", "왼손"]
     proplayer = ["페더러","나달","조코비치","야닉시너","알카라즈","손흥민","메시","마이클조던","오타니","이학수","이재용","젠슨황","무하마드 알리","타이거 우즈","도널드 트럼프","일론 머스크","샤라포바"]
 
-
     today = datetime.date.today().strftime("%Y%m%d")
-    random.seed(today + sel_player)
 
-    fortune = random.choice(fortune_messages)
-    fortune = (fortune.replace("(주손)", random.choice(hands))
-                      .replace("(라켓)", random.choice(rackets))
-                      .replace("(연령대)", random.choice(ages))
-                      .replace("(프로선수)", random.choice(proplayer))
-                      .replace("(자음)", random.choice(chosung)))
+    # ✅ 전역 random.seed() 금지! 로컬 RNG만 사용
+    rng = random.Random(today + str(sel_player))
+
+    fortune = rng.choice(fortune_messages)
+    fortune = (fortune.replace("(주손)", rng.choice(hands))
+                      .replace("(라켓)", rng.choice(rackets))
+                      .replace("(연령대)", rng.choice(ages))
+                      .replace("(프로선수)", rng.choice(proplayer))
+                      .replace("(자음)", rng.choice(chosung)))
 
     return fortune
+
 
 
 # ---------------------------------------------------------
@@ -2422,7 +2652,7 @@ roster = st.session_state.roster
 sessions = st.session_state.sessions
 roster_by_name = {p["name"]: p for p in roster}
 
-st.title("🎾 HANMIMOS matching assistante HMA (Beta)")
+st.title("🎾 HANMIMOS 게임 도우미 MSA (Beta)")
 
 # 📱 폰에서 볼 때 ON 해두면 A/B조 나란히 레이아웃을 세로로 바꿔줌
 mobile_mode = st.checkbox(
@@ -2837,7 +3067,7 @@ with tab1:
             new_name = st.text_input("이름", key="new_name")
             new_age = st.selectbox("나이대", AGE_OPTIONS, index=0, key="new_age")
             new_racket = st.selectbox("라켓", RACKET_OPTIONS, index=0, key="new_racket")
-            new_group = st.selectbox("조별 (A/B/C)", GROUP_OPTIONS, index=0, key="new_group")
+            new_group = st.selectbox("조별 (A/BC)", GROUP_OPTIONS, index=0, key="new_group")
         with c2:
             new_gender = st.selectbox("성별", GENDER_OPTIONS, index=0, key="new_gender")
             new_hand = st.selectbox("주로 쓰는 손", HAND_OPTIONS, index=0, key="new_hand")
@@ -3130,6 +3360,15 @@ def try_build_best_schedule_grouped(
     return best_schedule, ok_min_guard
 
 
+def _ui_to_doubles_mode(mode_label: str) -> str:
+    # UI 라벨 -> build_doubles_schedule의 mode 값으로 정확 매핑
+    if mode_label == "혼합복식 (남+여 짝)":
+        return "혼합복식"
+    if mode_label == "동성복식 (남+남 / 여+여)":
+        return "동성복식"
+    if mode_label == "랜덤 복식":
+        return "랜덤복식"
+    return "랜덤복식"
 
 
 
@@ -3148,6 +3387,23 @@ with tab2:
     # =========================================================
     # [TAB2] 수동 배정 유틸 (중복 방지 + 빈칸만 채우기)
     # =========================================================
+
+
+    def _ensure_manual_prefill():
+        if "_manual_prefill" not in st.session_state or not isinstance(st.session_state.get("_manual_prefill"), dict):
+            st.session_state["_manual_prefill"] = {}
+        if "_manual_prefill_used" not in st.session_state:
+            st.session_state["_manual_prefill_used"] = False
+    
+
+    
+    def _set_manual_prefill(plan: dict):
+        _ensure_manual_prefill()
+        st.session_state["_manual_prefill"].update(plan)
+        st.session_state["_manual_prefill_used"] = True
+
+
+
     def _manual_key(r: int, c: int, pos: int, gtype: str) -> str:
         gt = "D" if gtype == "복식" else "S"
         return f"man_{gt}_r{r}_c{c}_p{pos}"
@@ -3167,10 +3423,12 @@ with tab2:
     def _round_used_set(r: int, court_count: int, gtype: str):
         used = set()
         for k in _manual_all_keys_for_round(r, court_count, gtype):
-            v = st.session_state.get(k, "선택")
+            v = _get_manual_value(k)
             if v and v != "선택":
                 used.add(v)
         return used
+
+
 
     def _make_on_change_validator(r: int, key: str, court_count: int, gtype: str):
         def _cb():
@@ -3179,6 +3437,7 @@ with tab2:
                 st.session_state[f"_prev_{key}"] = "선택"
                 return
 
+            # 같은 라운드 내 중복 선택 방지
             for k in _manual_all_keys_for_round(r, court_count, gtype):
                 if k == key:
                     continue
@@ -3190,13 +3449,26 @@ with tab2:
 
         return _cb
 
-    def _apply_pending_widget_updates():
+
+    def _consume_manual_pending_to_prefill():
         pending = st.session_state.pop("_manual_pending_set", None)
-        if not isinstance(pending, dict) or not pending:
-            return
-        for k, v in pending.items():
-            st.session_state[k] = v
-            st.session_state[f"_prev_{k}"] = v
+        if isinstance(pending, dict) and pending:
+            _set_manual_prefill(pending)  # ✅ st.session_state[key] 직접 세팅 금지
+
+
+    def _get_manual_value(k: str) -> str:
+        return st.session_state.get(k, "선택")
+
+    def _apply_manual_pending():
+        pending = st.session_state.pop("_manual_pending_set", None)
+        if isinstance(pending, dict) and pending:
+            # ✅ 위젯 생성 전에 state에 박아넣어야 화면에 반영됨
+            for k, v in pending.items():
+                if v and v != "선택":
+                    st.session_state[k] = v
+                    st.session_state[f"_prev_{k}"] = v
+
+
 
     def _court_group_tag(view_mode: str, court_index: int):
         if view_mode == "조별 분리 (A/B조)":
@@ -3227,6 +3499,7 @@ with tab2:
             return None
         if target_ntrp is None:
             return random.choice(cands)
+
         scored = []
         for p in cands:
             pn = _ntrp_of(p)
@@ -3237,20 +3510,24 @@ with tab2:
         scored.sort(key=lambda x: (x[0], x[1]))
         return scored[0][2] if scored else random.choice(cands)
 
+
+
     def _build_filtered_options_for_key(r: int, k: str, pool, court_count: int, gtype: str):
-        current = st.session_state.get(k, "선택")
+        current = _get_manual_value(k)
+    
         used = _round_used_set(r, court_count, gtype)
         if current and current != "선택":
             used = set(used) - {current}
-
+    
         opts = ["선택"] + [p for p in sorted(pool) if p not in used]
         if current and current != "선택" and current not in opts:
             opts.insert(1, current)
-
-        idx = 0
-        if current in opts:
-            idx = opts.index(current)
+    
+        idx = opts.index(current) if current in opts else 0
         return opts, idx
+
+
+
 
     def _fill_round_plan(
         r: int,
@@ -3262,26 +3539,26 @@ with tab2:
         ntrp_on: bool,
     ):
         plan = {}
-
+    
         keys_round = _manual_all_keys_for_round(r, court_count, gtype)
-        fixed = {k: st.session_state.get(k, "선택") for k in keys_round}
+        fixed = {k: _get_manual_value(k) for k in keys_round}
         used = {v for v in fixed.values() if v and v != "선택"}
-
+    
         for c in range(1, int(court_count) + 1):
             grp_tag = _court_group_tag(view_mode, c)
             pool = _pool_by_group(players_selected, grp_tag)
-
+    
             if gtype == "단식":
                 k1 = _manual_key(r, c, 1, gtype)
                 k2 = _manual_key(r, c, 2, gtype)
                 v1 = fixed.get(k1, "선택")
                 v2 = fixed.get(k2, "선택")
-
+    
                 if v1 != "선택" and v2 != "선택":
                     continue
-
+    
                 avail = [p for p in pool if p not in used]
-
+    
                 if v1 != "선택" and v2 == "선택":
                     cand = avail
                     if gender_mode == "동성":
@@ -3292,7 +3569,7 @@ with tab2:
                         plan[k2] = pick
                         used.add(pick)
                     continue
-
+    
                 if v1 == "선택" and v2 != "선택":
                     cand = avail
                     if gender_mode == "동성":
@@ -3303,128 +3580,84 @@ with tab2:
                         plan[k1] = pick
                         used.add(pick)
                     continue
-
+    
                 if v1 == "선택" and v2 == "선택":
                     cand = avail
-                    if gender_mode == "동성":
-                        men = [p for p in cand if _gender_of(p) == "남"]
-                        women = [p for p in cand if _gender_of(p) == "여"]
-                        same_pool = men if (len(men) >= 2 and (len(women) < 2 or random.random() < 0.5)) else women
-                        if len(same_pool) >= 2:
-                            if ntrp_on:
-                                a = random.choice(same_pool)
-                                same_pool2 = [x for x in same_pool if x != a]
-                                b = _pick_by_ntrp_closest(same_pool2, _ntrp_of(a))
-                                if b:
-                                    plan[k1], plan[k2] = a, b
-                                    used.update([a, b])
-                            else:
-                                pick2 = random.sample(same_pool, 2)
-                                plan[k1], plan[k2] = pick2[0], pick2[1]
-                                used.update(pick2)
+                    if len(cand) >= 2:
+                        if ntrp_on:
+                            a = random.choice(cand)
+                            cand2 = [x for x in cand if x != a]
+                            b = _pick_by_ntrp_closest(cand2, _ntrp_of(a))
+                            if b:
+                                plan[k1], plan[k2] = a, b
+                                used.update([a, b])
+                        else:
+                            a, b = random.sample(cand, 2)
+                            plan[k1], plan[k2] = a, b
+                            used.update([a, b])
+                continue
+    
+            # ---------------- 복식 ----------------
+            ks = [_manual_key(r, c, i, gtype) for i in (1, 2, 3, 4)]
+            vs = [fixed.get(k, "선택") for k in ks]
+            empty_keys = [k for k, v in zip(ks, vs) if v == "선택"]
+            if not empty_keys:
+                continue
+    
+            already = [v for v in vs if v != "선택"]
+            avail = [p for p in pool if p not in used]
+            men = [p for p in avail if _gender_of(p) == "남"]
+            women = [p for p in avail if _gender_of(p) == "여"]
+    
+            need = len(empty_keys)
+            picks = []
+    
+            if gender_mode == "혼합":
+                already_m = sum(1 for x in already if _gender_of(x) == "남")
+                already_w = sum(1 for x in already if _gender_of(x) == "여")
+    
+                while len(picks) < need:
+                    want_m = (already_m + sum(1 for x in picks if _gender_of(x) == "남")) < 2
+                    want_w = (already_w + sum(1 for x in picks if _gender_of(x) == "여")) < 2
+    
+                    if want_m and men:
+                        pick = random.choice(men) if not ntrp_on else _pick_by_ntrp_closest(men, None)
+                        men.remove(pick)
+                    elif want_w and women:
+                        pick = random.choice(women) if not ntrp_on else _pick_by_ntrp_closest(women, None)
+                        women.remove(pick)
                     else:
-                        if len(cand) >= 2:
-                            if ntrp_on:
-                                a = random.choice(cand)
-                                cand2 = [x for x in cand if x != a]
-                                b = _pick_by_ntrp_closest(cand2, _ntrp_of(a))
-                                if b:
-                                    plan[k1], plan[k2] = a, b
-                                    used.update([a, b])
-                            else:
-                                pick2 = random.sample(cand, 2)
-                                plan[k1], plan[k2] = pick2[0], pick2[1]
-                                used.update(pick2)
-                    continue
-
-            else:
-                ks = [_manual_key(r, c, i, gtype) for i in (1, 2, 3, 4)]
-                vs = [fixed.get(k, "선택") for k in ks]
-                empty_keys = [k for k, v in zip(ks, vs) if v == "선택"]
-                if not empty_keys:
-                    continue
-
-                already = [v for v in vs if v != "선택"]
-                avail = [p for p in pool if p not in used]
-                men = [p for p in avail if _gender_of(p) == "남"]
-                women = [p for p in avail if _gender_of(p) == "여"]
-
-                need = len(empty_keys)
-                picks = []
-
-                if gender_mode == "혼합":
-                    already_m = sum(1 for x in already if _gender_of(x) == "남")
-                    already_w = sum(1 for x in already if _gender_of(x) == "여")
-
-                    while len(picks) < need:
-                        want_m = (already_m + sum(1 for x in picks if _gender_of(x) == "남")) < 2
-                        want_w = (already_w + sum(1 for x in picks if _gender_of(x) == "여")) < 2
-
-                        if want_m and men:
-                            pick = _pick_by_ntrp_closest(men, None) if ntrp_on else random.choice(men)
+                        rest = men + women
+                        if not rest:
+                            break
+                        pick = random.choice(rest) if not ntrp_on else _pick_by_ntrp_closest(rest, None)
+                        if pick in men:
                             men.remove(pick)
-                        elif want_w and women:
-                            pick = _pick_by_ntrp_closest(women, None) if ntrp_on else random.choice(women)
+                        else:
                             women.remove(pick)
-                        else:
-                            rest = men + women
-                            if not rest:
-                                break
-                            pick = _pick_by_ntrp_closest(rest, None) if ntrp_on else random.choice(rest)
-                            if pick in men:
-                                men.remove(pick)
-                            else:
-                                women.remove(pick)
-
-                        picks.append(pick)
-
-                elif gender_mode == "동성":
-                    already_gender = _gender_of(already[0]) if already else None
-                    if already_gender == "남":
-                        cand = men
-                    elif already_gender == "여":
-                        cand = women
-                    else:
-                        cand = men if len(men) >= need else women
-
-                    if len(cand) >= need:
-                        if ntrp_on and already:
-                            base = [x for x in already if _ntrp_of(x) is not None]
-                            target = None
-                            if base:
-                                target = sum(_ntrp_of(x) for x in base) / len(base)
-                            scored = []
-                            for p in cand:
-                                pn = _ntrp_of(p)
-                                d = abs(pn - target) if (pn is not None and target is not None) else 9999.0
-                                scored.append((d, random.random(), p))
-                            scored.sort(key=lambda x: (x[0], x[1]))
-                            picks = [x[2] for x in scored[:need]]
-                        else:
-                            picks = random.sample(cand, need)
-
-                else:
-                    rest = men + women
-                    if len(rest) >= need:
-                        if ntrp_on and already:
-                            base = [x for x in already if _ntrp_of(x) is not None]
-                            target = None
-                            if base:
-                                target = sum(_ntrp_of(x) for x in base) / len(base)
-                            scored = []
-                            for p in rest:
-                                pn = _ntrp_of(p)
-                                d = abs(pn - target) if (pn is not None and target is not None) else 9999.0
-                                scored.append((d, random.random(), p))
-                            scored.sort(key=lambda x: (x[0], x[1]))
-                            picks = [x[2] for x in scored[:need]]
-                        else:
-                            picks = random.sample(rest, need)
-
-                for k, p in zip(empty_keys, picks):
-                    plan[k] = p
-                    used.add(p)
-
+    
+                    picks.append(pick)
+    
+            elif gender_mode == "동성":
+                already_gender = _gender_of(already[0]) if already else None
+                cand = men if already_gender == "남" else women if already_gender == "여" else (men if len(men) >= need else women)
+                if len(cand) >= need:
+                    picks = random.sample(cand, need)
+    
+            else:
+                rest = men + women
+                if len(rest) >= need:
+                    picks = random.sample(rest, need)
+    
+            for k, p in zip(empty_keys, picks):
+                plan[k] = p
+                used.add(p)
+    
+        # ✅ 기존 값은 유지 (굳이 안 넣어도 되지만, 안전하게 같이 포함)
+        for k, v in fixed.items():
+            if v and v != "선택":
+                plan.setdefault(k, v)
+    
         return plan
 
     # =========================================================
@@ -3882,10 +4115,6 @@ with tab2:
         )
 
     view_mode_for_schedule = st.session_state.get("order_view_mode", "전체")
-
-    # ✅ 핵심 수정:
-    # - "조별 분리"를 선택하면 '스케줄 생성'은 A/B로 나눠 생성하지만,
-    # - group_only(조별로만 매칭)는 사용자 체크박스에 의해서만 동작
     group_only = bool(group_only_option)
 
     if (gtype == "복식") and is_aa_mode and (not is_manual_mode):
@@ -3904,6 +4133,9 @@ with tab2:
         st.subheader("4-1. 직접 배정(수동) 입력")
         st.caption("※ 한 라운드 안에서는 같은 선수가 중복 선택되지 않도록 제한됩니다.")
 
+        # ✅ pending → session_state (위젯 렌더 전에만!)
+        _apply_manual_pending()
+
         st.markdown("**성별 옵션**")
         manual_gender_mode = st.radio(
             "성별 옵션",
@@ -3914,34 +4146,60 @@ with tab2:
         )
         manual_fill_ntrp = st.checkbox("NTRP 고려", key="manual_fill_ntrp")
 
-        _apply_pending_widget_updates()
+
 
         b1, b2, b3 = st.columns(3)
         with b1:
             st.markdown('<div class="main-primary-btn">', unsafe_allow_html=True)
-            fill_all_clicked = st.button("빈칸 자동 채우기(전체 라운드)", use_container_width=True, key="btn_fill_all_rounds")
+            fill_all_clicked = st.button(
+                "빈칸 자동 채우기(전체 라운드)",
+                use_container_width=True,
+                key="btn_fill_all_rounds",
+            )
             st.markdown("</div>", unsafe_allow_html=True)
+
         with b2:
             st.markdown('<div class="main-danger-btn">', unsafe_allow_html=True)
-            clear_all_clicked = st.button("전체 초기화(수동 입력)", use_container_width=True, key="btn_clear_all_rounds")
+            clear_all_clicked = st.button(
+                "전체 초기화(수동 입력)",
+                use_container_width=True,
+                key="btn_clear_all_rounds",
+            )
             st.markdown("</div>", unsafe_allow_html=True)
+
         with b3:
             st.caption("라운드별 자동 채우기/초기화는 아래 라운드 박스에서도 가능")
 
-        if clear_all_clicked:
-            keys = []
-            for r in range(1, int(total_rounds) + 1):
-                keys.extend(_manual_all_keys_for_round(r, court_count, gtype))
-            for k in keys:
-                st.session_state[k] = "선택"
-                st.session_state[f"_prev_{k}"] = "선택"
-            safe_rerun()
+        # ✅ plan을 '바로' state에 반영 (pending/rerun 제거)
+        def _apply_plan_to_state(plan: dict):
+            if not isinstance(plan, dict):
+                return
+            for k, v in plan.items():
+                if v and v != "선택":
+                    st.session_state[k] = v
+                    st.session_state[f"_prev_{k}"] = v
 
+        # -------------------------
+        # 전체 초기화
+        # -------------------------
+        if clear_all_clicked:
+            for rr in range(1, int(total_rounds) + 1):
+                for k in _manual_all_keys_for_round(rr, court_count, gtype):
+                    st.session_state[k] = "선택"
+                    st.session_state[f"_prev_{k}"] = "선택"
+
+            st.session_state["_manual_prefill"] = {}
+            st.session_state["_manual_prefill_used"] = False
+            st.session_state.pop("_manual_pending_set", None)  # 혹시 남아있던 거 제거
+
+        # -------------------------
+        # 전체 라운드 빈칸 채우기
+        # -------------------------
         if fill_all_clicked and players_selected:
             plan_all = {}
-            for r in range(1, int(total_rounds) + 1):
+            for rr in range(1, int(total_rounds) + 1):
                 plan_r = _fill_round_plan(
-                    r=r,
+                    r=rr,
                     players_selected=players_selected,
                     court_count=court_count,
                     gtype=gtype,
@@ -3952,11 +4210,13 @@ with tab2:
                 plan_all.update(plan_r)
 
             if plan_all:
-                st.session_state["_manual_pending_set"] = plan_all
-                safe_rerun()
+                _apply_plan_to_state(plan_all)
             else:
                 st.info("이미 채울 빈칸이 없어.")
 
+        # -------------------------
+        # 라운드 UI
+        # -------------------------
         for r in range(1, int(total_rounds) + 1):
             with st.expander(f"라운드 {r}", expanded=(r == 1)):
 
@@ -3966,30 +4226,20 @@ with tab2:
 
                 with top1:
                     st.markdown('<div class="main-primary-btn">', unsafe_allow_html=True)
-                    if st.button("이 라운드 빈칸 채우기", use_container_width=True, key=f"btn_fill_round_{r}"):
-                        plan = _fill_round_plan(
-                            r=r,
-                            players_selected=players_selected,
-                            court_count=court_count,
-                            gtype=gtype,
-                            view_mode=view_mode_for_schedule,
-                            gender_mode=("혼합" if manual_gender_mode == "혼합" else "동성" if manual_gender_mode == "동성" else "랜덤"),
-                            ntrp_on=bool(manual_fill_ntrp),
-                        )
-                        if plan:
-                            st.session_state["_manual_pending_set"] = plan
-                            safe_rerun()
-                        else:
-                            st.info("이 라운드는 이미 빈칸이 없어.")
+                    fill_round_clicked = st.button(
+                        "이 라운드 빈칸 채우기",
+                        use_container_width=True,
+                        key=f"btn_fill_round_{r}",
+                    )
                     st.markdown("</div>", unsafe_allow_html=True)
 
                 with top2:
                     st.markdown('<div class="main-danger-btn">', unsafe_allow_html=True)
-                    if st.button("이 라운드 초기화", use_container_width=True, key=f"btn_clear_round_{r}"):
-                        for k in _manual_all_keys_for_round(r, court_count, gtype):
-                            st.session_state[k] = "선택"
-                            st.session_state[f"_prev_{k}"] = "선택"
-                        safe_rerun()
+                    clear_round_clicked = st.button(
+                        "이 라운드 초기화",
+                        use_container_width=True,
+                        key=f"btn_clear_round_{r}",
+                    )
                     st.markdown("</div>", unsafe_allow_html=True)
 
                 with top3:
@@ -3997,6 +4247,37 @@ with tab2:
                         f"<div style='text-align:right; font-weight:700; color:#374151;'>선택됨: {len(used)}명</div>",
                         unsafe_allow_html=True
                     )
+
+                # ✅ 이 라운드 초기화
+                if clear_round_clicked:
+                    for k in _manual_all_keys_for_round(r, court_count, gtype):
+                        st.session_state[k] = "선택"
+                        st.session_state[f"_prev_{k}"] = "선택"
+
+                    pre = st.session_state.get("_manual_prefill", {})
+                    for k in _manual_all_keys_for_round(r, court_count, gtype):
+                        pre.pop(k, None)
+                    st.session_state["_manual_prefill"] = pre
+
+                # ✅ 이 라운드 빈칸 채우기
+                if fill_round_clicked:
+                    plan = _fill_round_plan(
+                        r=r,
+                        players_selected=players_selected,
+                        court_count=court_count,
+                        gtype=gtype,
+                        view_mode=view_mode_for_schedule,
+                        gender_mode=("혼합" if manual_gender_mode == "혼합" else "동성" if manual_gender_mode == "동성" else "랜덤"),
+                        ntrp_on=bool(manual_fill_ntrp),
+                    )
+                    if plan:
+                        _apply_plan_to_state(plan)
+                    else:
+                        st.info("이 라운드는 이미 빈칸이 없어.")
+
+                st.markdown("<div style='height:0.6rem;'></div>", unsafe_allow_html=True)
+
+                # (👇 여기 아래 코트별 selectbox 렌더 부분은 너 원래 코드 그대로 두면 됨)
 
                 st.markdown("<div style='height:0.6rem;'></div>", unsafe_allow_html=True)
 
@@ -4014,7 +4295,7 @@ with tab2:
 
                         with col1:
                             opts, idx = _build_filtered_options_for_key(r, k1, pool, court_count, gtype)
-                            v = st.selectbox(
+                            st.selectbox(
                                 "p1",
                                 opts,
                                 index=idx,
@@ -4022,14 +4303,14 @@ with tab2:
                                 label_visibility="collapsed",
                                 on_change=_make_on_change_validator(r, k1, court_count, gtype),
                             )
-                            st.session_state[f"_prev_{k1}"] = v
+                            st.session_state[f"_prev_{k1}"] = st.session_state.get(k1, "선택")
 
                         with colVS:
                             st.markdown("<div style='text-align:center; font-weight:900;'>VS</div>", unsafe_allow_html=True)
 
                         with col2:
                             opts, idx = _build_filtered_options_for_key(r, k2, pool, court_count, gtype)
-                            v = st.selectbox(
+                            st.selectbox(
                                 "p2",
                                 opts,
                                 index=idx,
@@ -4037,7 +4318,7 @@ with tab2:
                                 label_visibility="collapsed",
                                 on_change=_make_on_change_validator(r, k2, court_count, gtype),
                             )
-                            st.session_state[f"_prev_{k2}"] = v
+                            st.session_state[f"_prev_{k2}"] = st.session_state.get(k2, "선택")
 
                     else:
                         k1 = _manual_key(r, c, 1, gtype)
@@ -4045,119 +4326,90 @@ with tab2:
                         k3 = _manual_key(r, c, 3, gtype)
                         k4 = _manual_key(r, c, 4, gtype)
 
-
-
-
-
-                        # ✅ 복식(수동) 4명 배정 UI
                         col1, col2, colVS, col3, col4 = st.columns(
-                            [3.0, 3.0, 0.9, 3.0, 3.0],
+                            [2.6, 2.6, 0.9, 2.6, 2.6],
                             vertical_alignment="center"
                         )
 
                         with col1:
                             opts, idx = _build_filtered_options_for_key(r, k1, pool, court_count, gtype)
-                            v = st.selectbox(
-                                "p1",
+                            st.selectbox(
+                                "t1a",
                                 opts,
                                 index=idx,
                                 key=k1,
                                 label_visibility="collapsed",
                                 on_change=_make_on_change_validator(r, k1, court_count, gtype),
                             )
-                            st.session_state[f"_prev_{k1}"] = v
+                            st.session_state[f"_prev_{k1}"] = st.session_state.get(k1, "선택")
 
                         with col2:
                             opts, idx = _build_filtered_options_for_key(r, k2, pool, court_count, gtype)
-                            v = st.selectbox(
-                                "p2",
+                            st.selectbox(
+                                "t1b",
                                 opts,
                                 index=idx,
                                 key=k2,
                                 label_visibility="collapsed",
                                 on_change=_make_on_change_validator(r, k2, court_count, gtype),
                             )
-                            st.session_state[f"_prev_{k2}"] = v
+                            st.session_state[f"_prev_{k2}"] = st.session_state.get(k2, "선택")
 
                         with colVS:
-                            st.markdown(
-                                "<div style='text-align:center; font-weight:900;'>VS</div>",
-                                unsafe_allow_html=True
-                            )
+                            st.markdown("<div style='text-align:center; font-weight:900;'>VS</div>", unsafe_allow_html=True)
 
                         with col3:
                             opts, idx = _build_filtered_options_for_key(r, k3, pool, court_count, gtype)
-                            v = st.selectbox(
-                                "p3",
+                            st.selectbox(
+                                "t2a",
                                 opts,
                                 index=idx,
                                 key=k3,
                                 label_visibility="collapsed",
                                 on_change=_make_on_change_validator(r, k3, court_count, gtype),
                             )
-                            st.session_state[f"_prev_{k3}"] = v
+                            st.session_state[f"_prev_{k3}"] = st.session_state.get(k3, "선택")
 
                         with col4:
                             opts, idx = _build_filtered_options_for_key(r, k4, pool, court_count, gtype)
-                            v = st.selectbox(
-                                "p4",
+                            st.selectbox(
+                                "t2b",
                                 opts,
                                 index=idx,
                                 key=k4,
                                 label_visibility="collapsed",
                                 on_change=_make_on_change_validator(r, k4, court_count, gtype),
                             )
-                            st.session_state[f"_prev_{k4}"] = v
-
-                        # (선택) 아래에 간단 프리뷰 한 줄
-                        v1 = st.session_state.get(k1, "선택")
-                        v2 = st.session_state.get(k2, "선택")
-                        v3 = st.session_state.get(k3, "선택")
-                        v4 = st.session_state.get(k4, "선택")
-
-                        def _badge_or_blank(x):
-                            return render_name_badge(x, roster_by_name) if x and x != "선택" else "<span style='color:#9ca3af;'>—</span>"
-
-                        st.markdown(
-                            f"<div style='margin-top:0.25rem; font-size:0.9rem;'>"
-                            f"{_badge_or_blank(v1)}{_badge_or_blank(v2)}"
-                            f" <b>vs</b> "
-                            f"{_badge_or_blank(v3)}{_badge_or_blank(v4)}"
-                            f"</div>",
-                            unsafe_allow_html=True
-                        )
-
-
-
-
-
+                            st.session_state[f"_prev_{k4}"] = st.session_state.get(k4, "선택")
 
                     st.markdown("<div style='height:0.6rem;'></div>", unsafe_allow_html=True)
 
                 st.markdown("---")
 
+        # -------------------------
+        # 수동 대진 리스트 만들기 (실제 위젯 값 기준)
+        # -------------------------
         manual_schedule = []
-        for r in range(1, int(total_rounds) + 1):
-            for c in range(1, int(court_count) + 1):
+        for rr in range(1, int(total_rounds) + 1):
+            for cc in range(1, int(court_count) + 1):
                 if gtype == "단식":
-                    k1 = _manual_key(r, c, 1, gtype)
-                    k2 = _manual_key(r, c, 2, gtype)
+                    k1 = _manual_key(rr, cc, 1, gtype)
+                    k2 = _manual_key(rr, cc, 2, gtype)
                     a = st.session_state.get(k1, "선택")
                     b = st.session_state.get(k2, "선택")
                     if a != "선택" and b != "선택" and a != b:
-                        manual_schedule.append(("단식", [a], [b], c))
+                        manual_schedule.append(("단식", [a], [b], cc))
                 else:
-                    ks = [_manual_key(r, c, i, gtype) for i in (1, 2, 3, 4)]
+                    ks = [_manual_key(rr, cc, i, gtype) for i in (1, 2, 3, 4)]
                     vals = [st.session_state.get(k, "선택") for k in ks]
                     if all(v != "선택" for v in vals) and len(set(vals)) == 4:
-                        t1 = [vals[0], vals[1]]
-                        t2 = [vals[2], vals[3]]
-                        manual_schedule.append(("복식", t1, t2, c))
+                        manual_schedule.append(("복식", [vals[0], vals[1]], [vals[2], vals[3]], cc))
 
         st.session_state.today_schedule = manual_schedule
 
+
     # =========================================================
-    # 5. 대진표 생성 / 미리보기 / 저장
+    # 5. 대진표 생성 / 미리보기 / 저장  (✅ 자동/수동 공통 영역)
     # =========================================================
     st.markdown("---")
     st.subheader("5. 대진표 생성 / 미리보기")
@@ -4191,235 +4443,6 @@ with tab2:
 
         mode_name = mode_label if gtype == "복식" else singles_mode
 
-        # =========================================================
-        # ✅ [패치] 혼합복식 강제 팀 구성 + 인당 경기수 편차(<=1) 우선 스케줄 선택
-        # =========================================================
-        def _g_mfu(name: str) -> str:
-            g = roster_by_name.get(name, {}).get("gender", None)
-            if g in ("남", "남자", "M", "male"):
-                return "M"
-            if g in ("여", "여자", "F", "female"):
-                return "F"
-            return "U"
-
-        def _split_mixed_teams(p4):
-            """혼합복식: 가능한 한 (남+여)/(남+여). 안되면 랜덤과 다르게 분할."""
-            ms = [p for p in p4 if _g_mfu(p) == "M"]
-            fs = [p for p in p4 if _g_mfu(p) == "F"]
-            us = [p for p in p4 if _g_mfu(p) == "U"]
-
-            # 2M+2F면 완전 혼합
-            if len(ms) >= 2 and len(fs) >= 2:
-                random.shuffle(fs)
-                return [ms[0], fs[0]], [ms[1], fs[1]]
-
-            # 1M+1F라도 있으면 한 팀은 M+F 만들어보기
-            if ms and fs:
-                t1 = [ms.pop(), fs.pop()]
-                rest = us + ms + fs
-                random.shuffle(rest)
-
-                r_m = [p for p in rest if _g_mfu(p) == "M"]
-                r_f = [p for p in rest if _g_mfu(p) == "F"]
-                r_u = [p for p in rest if _g_mfu(p) == "U"]
-
-                if r_m and r_f:
-                    t2 = [r_m[0], r_f[0]]
-                else:
-                    t2 = (r_u + r_m + r_f)[:2]
-                return t1, t2
-
-            # 거의 다 U(또는 동성) → 랜덤복식과 다르게 (0,2) vs (1,3) 분할
-            tmp = p4[:]
-            random.shuffle(tmp)
-            return [tmp[0], tmp[2]], [tmp[1], tmp[3]]
-
-        def _normalize_mixed_schedule(sched):
-            """스케줄이 이미 만들어진 뒤에도 '혼합복식'이면 팀 구성을 다시 섞어줌."""
-            out = []
-            for (gt, t1, t2, court) in sched:
-                if gt != "복식":
-                    out.append((gt, t1, t2, court))
-                    continue
-                p4 = (t1 or []) + (t2 or [])
-                if len(p4) != 4:
-                    out.append((gt, t1, t2, court))
-                    continue
-                nt1, nt2 = _split_mixed_teams(p4)
-                out.append((gt, nt1, nt2, court))
-            return out
-
-
-
-        from collections import Counter
-
-        def _pair_key(a, b):
-            return tuple(sorted([a, b]))
-
-        def _opp_pairs(t1, t2):
-            """t1(2명) vs t2(2명)에서 생기는 '상대 조합' 4개"""
-            if len(t1) != 2 or len(t2) != 2:
-                return []
-            a, b = t1
-            c, d = t2
-            return [
-                _pair_key(a, c), _pair_key(a, d),
-                _pair_key(b, c), _pair_key(b, d),
-            ]
-
-        def _partner_repeats_score(sched):
-            """파트너 중복 정도(작을수록 좋음)"""
-            cnt = Counter()
-            for (gt, t1, t2, _court) in sched:
-                if gt != "복식":
-                    continue
-                if t1 and len(t1) == 2:
-                    cnt[_pair_key(t1[0], t1[1])] += 1
-                if t2 and len(t2) == 2:
-                    cnt[_pair_key(t2[0], t2[1])] += 1
-
-            repeats = sum(v - 1 for v in cnt.values() if v > 1)
-            max_pair = max(cnt.values()) if cnt else 0
-            return repeats, max_pair
-
-        def _opponent_repeats_score(sched):
-            """상대 중복 정도(작을수록 좋음)"""
-            cnt = Counter()
-            for (gt, t1, t2, _court) in sched:
-                if gt != "복식":
-                    continue
-                for k in _opp_pairs(t1 or [], t2 or []):
-                    cnt[k] += 1
-
-            repeats = sum(v - 1 for v in cnt.values() if v > 1)
-            max_pair = max(cnt.values()) if cnt else 0
-            return repeats, max_pair
-
-        def _valid_team_same_gender(team):
-            if len(team) != 2:
-                return False
-            g1 = _g_mfu(team[0])
-            g2 = _g_mfu(team[1])
-            return (g1 != "U" and g1 == g2)
-
-        def _valid_team_mixed(team):
-            if len(team) != 2:
-                return False
-            g1 = _g_mfu(team[0])
-            g2 = _g_mfu(team[1])
-            if g1 == "U" or g2 == "U":
-                return True
-            return g1 != g2
-
-        def _best_split_for_4(p4, mode_name, partner_cnt, opp_cnt):
-            """
-            같은 4명(p4) 안에서 가능한 팀 분할 중
-            '파트너 중복' + '상대 중복'이 최소가 되게 고름.
-            """
-            a, b, c, d = p4
-            candidates = [
-                ([a, b], [c, d]),
-                ([a, c], [b, d]),
-                ([a, d], [b, c]),
-            ]
-
-            if mode_name == "혼합복식 (남+여 짝)":
-                filtered = []
-                for t1, t2 in candidates:
-                    if _valid_team_mixed(t1) and _valid_team_mixed(t2):
-                        filtered.append((t1, t2))
-                if filtered:
-                    candidates = filtered
-
-            if mode_name == "동성복식 (남+남 / 여+여)":
-                filtered = []
-                for t1, t2 in candidates:
-                    if _valid_team_same_gender(t1) and _valid_team_same_gender(t2):
-                        filtered.append((t1, t2))
-                if filtered:
-                    candidates = filtered
-
-            def cost(t1, t2):
-                p1 = partner_cnt[_pair_key(t1[0], t1[1])]
-                p2 = partner_cnt[_pair_key(t2[0], t2[1])]
-                partner_sum = p1 + p2
-                partner_max = max(p1, p2)
-
-                opp_keys = _opp_pairs(t1, t2)
-                opp_vals = [opp_cnt[k] for k in opp_keys]
-                opp_sum = sum(opp_vals)
-                opp_max = max(opp_vals) if opp_vals else 0
-
-                return (opp_sum, partner_sum, opp_max, partner_max, random.random())
-
-            best = min(candidates, key=lambda x: cost(x[0], x[1]))
-            return best[0], best[1]
-
-        def _diversify_matchups_in_schedule(sched, mode_name):
-            """
-            스케줄의 '같은 4명' 구성은 유지하되,
-            팀만 재조합해서 파트너/상대 중복을 최대한 줄임.
-            """
-            if not sched or gtype != "복식":
-                return sched
-
-            partner_cnt = Counter()
-            opp_cnt = Counter()
-            out = []
-
-            for (gt, t1, t2, court) in sched:
-                if gt != "복식":
-                    out.append((gt, t1, t2, court))
-                    continue
-
-                p4 = (t1 or []) + (t2 or [])
-                if len(p4) != 4:
-                    out.append((gt, t1, t2, court))
-                    continue
-
-                random.shuffle(p4)
-
-                nt1, nt2 = _best_split_for_4(p4, mode_name, partner_cnt, opp_cnt)
-
-                partner_cnt[_pair_key(nt1[0], nt1[1])] += 1
-                partner_cnt[_pair_key(nt2[0], nt2[1])] += 1
-                for k in _opp_pairs(nt1, nt2):
-                    opp_cnt[k] += 1
-
-                out.append((gt, nt1, nt2, court))
-
-            return out
-
-
-        def _schedule_score(sched):
-            cnt = count_player_games(sched)
-            counts = [int(cnt.get(p, 0)) for p in players_selected]
-            mn = min(counts) if counts else 0
-            mx = max(counts) if counts else 0
-            diff = mx - mn
-            zeros = sum(1 for x in counts if x == 0)
-
-            partner_rep, partner_max = _partner_repeats_score(sched)
-            opp_rep, opp_max = _opponent_repeats_score(sched)
-
-            return (diff, opp_rep, partner_rep, opp_max, partner_max, zeros, -len(sched), random.random())
-
-
-        def _finalize_schedule(sched):
-            if not sched:
-                return []
-
-            if gtype == "복식" and mode_name == "혼합복식 (남+여 짝)":
-                sched = _normalize_mixed_schedule(sched)
-
-            if gtype == "복식":
-                sched = _diversify_matchups_in_schedule(sched, mode_name)
-
-            return sched
-
-
-
-
         def build_group(players_group, cc):
             if len(players_group) < (4 if gtype == "복식" else 2):
                 return []
@@ -4450,7 +4473,7 @@ with tab2:
                     use_ntrp=bool(use_ntrp),
                     group_only=bool(group_only),
                     roster_by_name=roster_by_name,
-                    relaxed_mixed=(mode_name == "혼합복식 (남+여 짝)"),
+
                 )
 
             else:
@@ -4491,9 +4514,6 @@ with tab2:
                 players_A, players_B, _ = _split_players_ab(players_selected, roster_by_name)
 
                 tries = 80
-                best = []
-                best_score = (999, 999, 999, 0)
-
                 for _ in range(tries):
                     sched_A = build_group(players_A, ca)
                     sched_B = build_group(players_B, cb)
@@ -4508,50 +4528,26 @@ with tab2:
                             merged = _interleave_by_round(sched_A, sched_B, ca, cb, total_rounds=None)
 
                         if merged:
-                            merged = _finalize_schedule(merged)
-                            sc = _schedule_score(merged)
-                            if sc < best_score:
-                                best = merged
-                                best_score = sc
-
-                if best:
-                    return best
+                            return merged
 
             # 폴백: 조별 분리인데 한쪽 코트가 없거나 생성 실패하면 전체 생성
             tries = 80
             best = []
-            best_score = (999, 999, 999, 0)
-
             for _ in range(tries):
                 cand = build_group(players_selected, int(court_count))
                 if cand:
-                    cand = _finalize_schedule(cand)
-                    sc = _schedule_score(cand)
-                    if sc < best_score:
-                        best = cand
-                        best_score = sc
-
+                    best = cand
+                    break
             return best
 
         # ✅ 전체 모드면: 기존처럼 전체 생성
         tries = 80
         best = []
-        best_score = (999, 999, 999, 0)
-
         for _ in range(tries):
             cand = build_group(players_selected, int(court_count))
             if cand:
-                cand = _finalize_schedule(cand)
-                sc = _schedule_score(cand)
-                if sc < best_score:
-                    best = cand
-                    best_score = sc
-
-                    # ✅ “인당 경기수 차이 1 이하”가 나오면 그쪽으로 빠르게 수렴
-                    if best_score[0] <= 1:
-                        # 그래도 몇 번 더 보려면 이 break 지워도 됨
-                        break
-
+                best = cand
+                break
         return best
 
     # 생성
@@ -4575,7 +4571,6 @@ with tab2:
     if schedule:
         st.markdown("### ✅ 오늘 대진표 미리보기")
 
-        # ✅ 조별 분리 보기면, 화면도 A/B로 나눠 보여주기
         if view_mode_for_schedule == "조별 분리 (A/B조)":
             sched_A = [(gt, t1, t2, court) for (gt, t1, t2, court) in schedule if int(court) % 2 == 1]
             sched_B = [(gt, t1, t2, court) for (gt, t1, t2, court) in schedule if int(court) % 2 == 0]
@@ -4613,7 +4608,6 @@ with tab2:
                         """,
                         unsafe_allow_html=True,
                     )
-
         else:
             for i, (gt, t1, t2, court) in enumerate(schedule, start=1):
                 t1_badges = "".join(render_name_badge(n, roster_by_name) for n in t1)
@@ -4665,11 +4659,6 @@ with tab2:
             save_sessions(sessions)
             st.session_state.sessions = sessions
             st.success(f"{save_date_str} 대진이 저장됐어! (스페셜 매치: {'ON' if day_data['special_match'] else 'OFF'})")
-
-
-
-
-
 
 # =========================================================
 # 3) 경기 기록 / 통계 (날짜별)
