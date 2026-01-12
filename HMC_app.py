@@ -11,60 +11,11 @@ import streamlit as st
 import streamlit.components.v1 as components
 import plotly.express as px
 
-import io
-from google.oauth2 import service_account
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseDownload, MediaIoBaseUpload
-
-
-DRIVE_SCOPES = ["https://www.googleapis.com/auth/drive"]
-
-@st.cache_resource
-def get_drive_service():
-    info = dict(st.secrets["google_service_account"])
-    creds = service_account.Credentials.from_service_account_info(info, scopes=DRIVE_SCOPES)
-    return build("drive", "v3", credentials=creds, cache_discovery=False)
-
-def drive_download_text(file_id: str) -> str:
-    service = get_drive_service()
-    req = service.files().get_media(fileId=file_id, supportsAllDrives=True)
-    fh = io.BytesIO()
-    downloader = MediaIoBaseDownload(fh, req)
-    done = False
-    while not done:
-        _, done = downloader.next_chunk()
-    return fh.getvalue().decode("utf-8")
-
-def drive_upload_text(file_id: str, text: str):
-    service = get_drive_service()
-    media = MediaIoBaseUpload(
-        io.BytesIO(text.encode("utf-8")),
-        mimetype="application/json",
-        resumable=False,
-    )
-    service.files().update(
-        fileId=file_id,
-        media_body=media,
-        supportsAllDrives=True,
-    ).execute()
-
-def load_json_drive(file_id: str, default):
-    try:
-        raw = drive_download_text(file_id)
-        return json.loads(raw) if raw.strip() else default
-    except Exception:
-        return default
-
-def save_json_drive(file_id: str, data):
-    text = json.dumps(data, ensure_ascii=False, indent=2)
-    drive_upload_text(file_id, text)
-
-
 # ---------------------------------------------------------
 # Streamlit 초기화 (✅ 딱 1번만 / 제일 위에서)
 # ---------------------------------------------------------
 st.set_page_config(
-    page_title="HANMIMOS 게임 도우미 (Beta)",
+    page_title="마리아 상암포바 도우미 MSA (Beta)",
     layout="centered",
     initial_sidebar_state="collapsed",
 )
@@ -708,21 +659,20 @@ def save_json(path, data):
         json.dump(data, f, ensure_ascii=False, indent=2)
 
 
-PLAYERS_FILE_ID = st.secrets["drive"]["players_file_id"]
-SESSIONS_FILE_ID = st.secrets["drive"]["sessions_file_id"]
-
 def load_players():
-    return load_json_drive(PLAYERS_FILE_ID, [])
+    return load_json(PLAYERS_FILE, [])
+
 
 def save_players(players):
-    save_json_drive(PLAYERS_FILE_ID, players)
+    save_json(PLAYERS_FILE, players)
+
 
 def load_sessions():
-    return load_json_drive(SESSIONS_FILE_ID, {})
+    return load_json(SESSIONS_FILE, {})
+
 
 def save_sessions(sessions):
-    save_json_drive(SESSIONS_FILE_ID, sessions)
-
+    save_json(SESSIONS_FILE, sessions)
 
 
 def render_static_on_mobile(df_or_styler):
@@ -2702,7 +2652,7 @@ roster = st.session_state.roster
 sessions = st.session_state.sessions
 roster_by_name = {p["name"]: p for p in roster}
 
-st.title("🎾 HANMIMOS 게임 도우미 MSA (Beta)")
+st.title("🎾 마리아 상암포바 도우미 MSA (Beta)")
 
 # 📱 폰에서 볼 때 ON 해두면 A/B조 나란히 레이아웃을 세로로 바꿔줌
 mobile_mode = st.checkbox(
@@ -3854,7 +3804,7 @@ with tab2:
         gc1, gc2, gc3, gc4, gc5 = st.columns([2.5, 1.0, 1.2, 1.1, 1.2])
 
         with gc1:
-            guest_name = st.text_input("게스트 이름", key="guest_name_input", placeholder="예: 차은우")
+            guest_name = st.text_input("게스트 이름", key="guest_name_input", placeholder="예: 홍길동")
         with gc2:
             guest_gender = st.selectbox("성별", ["남", "여"], index=0, key="guest_gender_input")
         with gc3:
@@ -5574,6 +5524,78 @@ with tab3:
                             target_dict[p].append(score_t2)
 
                     if summary_view_mode == "대진별 보기":
+
+
+
+
+
+
+                        # =========================================================
+                        # ✅ [대진표 캡처 + 텍스트 복사용] 준비 (24칸 들여쓰기)
+                        #   - 대진별 보기에서만 동작
+                        # =========================================================
+                        import re, json
+                        import streamlit.components.v1 as components
+
+                        def _team_join(x):
+                            if isinstance(x, (list, tuple)):
+                                return ",".join([str(v).strip() for v in x if str(v).strip()])
+                            s = re.sub(r"<[^>]*>", "", str(x)).strip()
+                            s = re.sub(r"\s+", " ", s).strip()
+                            parts = [p.strip() for p in s.split(" ") if p.strip()]
+                            return ",".join(parts)
+
+                        def build_fixture_text_by_round(schedule_list):
+                            """
+                            schedule: [(gtype, t1, t2, court), ...]
+                            출력 포맷:
+                              1게임.1코트 A,B vs C,D
+                              1게임.2코트 E,F vs G,H
+
+                              2게임.1코트 ...
+                              2게임.2코트 ...
+                            """
+                            if not schedule_list:
+                                return ""
+
+                            # 코트 개수 추정(안전: 유니크 코트 수)
+                            courts = []
+                            for item in schedule_list:
+                                try:
+                                    courts.append(int(item[3]))
+                                except Exception:
+                                    pass
+                            court_count = len(sorted(set(courts))) if courts else 1
+                            if court_count <= 0:
+                                court_count = 1
+
+                            lines = []
+                            prev_round = None
+
+                            for i, (gtype, t1, t2, court) in enumerate(schedule_list):
+                                round_no = (i // court_count) + 1
+
+                                try:
+                                    court_no = int(court)
+                                except Exception:
+                                    court_no = (i % court_count) + 1
+
+                                if prev_round is not None and round_no != prev_round:
+                                    lines.append("")  # ✅ 게임 바뀌면 빈 줄 1개(=두줄 띄기 효과)
+
+                                lines.append(f"{round_no}게임.{court_no}코트 {_team_join(t1)} vs {_team_join(t2)}")
+                                prev_round = round_no
+
+                            return "\n".join(lines).strip()
+
+                        fixture_text = build_fixture_text_by_round(schedule)
+
+                        safe_date_key = re.sub(r"[^0-9a-zA-Z_]+", "_", str(sel_date))
+                        capture_id = f"tab3_fixture_capture_{safe_date_key}"
+
+                        # ✅ 캡처 범위 마커 (start/end)
+                        st.markdown(f'<div id="{capture_id}__start"></div>', unsafe_allow_html=True)
+
                         if view_mode_scores == "조별 보기 (A/B조)":
                             if games_A_sum:
                                 st.markdown("### A조 경기 요약")
@@ -5587,7 +5609,192 @@ with tab3:
                         else:
                             all_games_sum = games_A_sum + games_B_sum + games_other_sum
                             render_score_summary_table(all_games_sum, roster_by_name)
+
+                        st.markdown(f'<div id="{capture_id}__end"></div>', unsafe_allow_html=True)
+
+
+
+                        # =========================================================
+                        # ✅ [표 아래] JPEG 저장 + 텍스트 클립보드 복사 버튼
+                        #   - start/end 마커 사이 DOM을 복제해서 JPEG 캡처
+                        # =========================================================
+                        components.html(
+                            f"""
+                            <div style="display:flex; gap:12px; margin-top:14px; align-items:center;">
+                              <button id="{capture_id}__save"
+                                style="flex:1; padding:10px 12px; border-radius:10px; border:1px solid rgba(0,0,0,0.15);
+                                       background:white; cursor:pointer; font-weight:700;">
+                                대진표 이미지 저장 (JPEG)
+                              </button>
+
+                              <button id="{capture_id}__copy"
+                                style="flex:1; padding:10px 12px; border-radius:10px; border:1px solid rgba(0,0,0,0.15);
+                                       background:white; cursor:pointer; font-weight:700;">
+                                대진표 텍스트 저장 (클립보드)
+                              </button>
+
+                              <span id="{capture_id}__msg" style="font-size:12px; opacity:0.7;"></span>
+                            </div>
+
+                            <script>
+                            (function() {{
+                              const capId = {json.dumps(capture_id)};
+                              const fileName = "대진표_" + {json.dumps(str(sel_date))}.replace(/[^0-9a-zA-Z_\\-]+/g, "_") + ".jpg";
+                              const text = {json.dumps(fixture_text)};
+
+                              const msgEl  = document.getElementById(capId + "__msg");
+                              const btnSave = document.getElementById(capId + "__save");
+                              const btnCopy = document.getElementById(capId + "__copy");
+
+                              function setMsg(m) {{
+                                if (msgEl) msgEl.textContent = m;
+                              }}
+
+                              function ensureHtml2Canvas() {{
+                                return new Promise((resolve, reject) => {{
+                                  const p = window.parent;
+                                  if (p && p.html2canvas) {{
+                                    resolve(p.html2canvas);
+                                    return;
+                                  }}
+                                  const ps = p.document.createElement("script");
+                                  ps.src = "https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js";
+                                  ps.onload = () => resolve(p.html2canvas);
+                                  ps.onerror = reject;
+                                  p.document.head.appendChild(ps);
+                                }});
+                              }}
+
+                              async function copyTextFallback(t) {{
+                                const pdoc = window.parent.document;
+                                const ta = pdoc.createElement("textarea");
+                                ta.value = t;
+                                ta.style.position = "fixed";
+                                ta.style.left = "-9999px";
+                                pdoc.body.appendChild(ta);
+                                ta.focus();
+                                ta.select();
+                                try {{
+                                  pdoc.execCommand("copy");
+                                }} catch(e) {{}}
+                                ta.remove();
+                              }}
+
+                              if (btnSave) {{
+                                btnSave.onclick = async function() {{
+                                  try {{
+                                    setMsg("이미지 생성중…");
+                                    const pdoc = window.parent.document;
+
+                                    const start = pdoc.getElementById(capId + "__start");
+                                    const end   = pdoc.getElementById(capId + "__end");
+                                    if (!start || !end) {{
+                                      setMsg("캡처 마커를 찾지 못했어.");
+                                      return;
+                                    }}
+
+                                    const startTop = start.closest('div[data-testid="stElementContainer"]')
+                                                  || start.closest('div.element-container')
+                                                  || start.parentElement;
+
+                                    const endTop   = end.closest('div[data-testid="stElementContainer"]')
+                                                  || end.closest('div.element-container')
+                                                  || end.parentElement;
+
+                                    let common = startTop ? startTop.parentElement : null;
+                                    while (common && endTop && !common.contains(endTop)) {{
+                                      common = common.parentElement;
+                                    }}
+                                    if (!common) {{
+                                      setMsg("캡처 범위(공통부모) 찾기 실패");
+                                      return;
+                                    }}
+
+                                    const kids = Array.from(common.children);
+                                    const si = kids.indexOf(startTop);
+                                    const ei = kids.indexOf(endTop);
+
+                                    if (si < 0 || ei < 0 || ei <= si) {{
+                                      setMsg("캡처 범위 인덱스 오류");
+                                      return;
+                                    }}
+
+                                    const wrapper = pdoc.createElement("div");
+                                    wrapper.style.position = "fixed";
+                                    wrapper.style.left = "-100000px";
+                                    wrapper.style.top = "0";
+                                    wrapper.style.background = "#ffffff";
+                                    wrapper.style.width = (common.clientWidth || 1200) + "px";
+                                    wrapper.style.padding = "0";
+                                    wrapper.style.margin = "0";
+
+                                    for (let i = si + 1; i < ei; i++) {{
+                                      wrapper.appendChild(kids[i].cloneNode(true));
+                                    }}
+
+                                    pdoc.body.appendChild(wrapper);
+
+                                    const h2c = await ensureHtml2Canvas();
+                                    const canvas = await h2c(wrapper, {{
+                                      backgroundColor: "#ffffff",
+                                      scale: 2,
+                                      useCORS: true
+                                    }});
+
+                                    wrapper.remove();
+
+                                    const url = canvas.toDataURL("image/jpeg", 0.95);
+                                    const a = pdoc.createElement("a");
+                                    a.href = url;
+                                    a.download = fileName;
+                                    pdoc.body.appendChild(a);
+                                    a.click();
+                                    a.remove();
+
+                                    setMsg("JPEG 저장 완료!");
+                                  }} catch (e) {{
+                                    console.log(e);
+                                    setMsg("저장 실패(콘솔 확인)");
+                                  }}
+                                }};
+                              }}
+
+                              if (btnCopy) {{
+                                btnCopy.onclick = async function() {{
+                                  try {{
+                                    await window.parent.navigator.clipboard.writeText(text);
+                                    setMsg("클립보드 복사 완료!");
+                                  }} catch(e) {{
+                                    await copyTextFallback(text);
+                                    setMsg("클립보드 복사 완료!");
+                                  }}
+                                }};
+                              }}
+                            }})();
+                            </script>
+                            """,
+                            height=90,
+                        )
+
+
+
+
+
+
+
                     else:
+                        # =========================================================
+                        # ✅ [개인별 보기] 캡처 마커 + 이미지 저장 버튼(only)
+                        # =========================================================
+                        import re, json
+                        import streamlit.components.v1 as components
+
+                        safe_date_key_p = re.sub(r"[^0-9a-zA-Z_]+", "_", str(sel_date))
+                        capture_id_p = f"tab3_personal_capture_{safe_date_key_p}"
+
+                        # ✅ 캡처 범위 시작 마커
+                        st.markdown(f'<div id="{capture_id_p}__start"></div>', unsafe_allow_html=True)
+
                         def render_player_score_table(title, per_dict):
                             if not per_dict:
                                 return
@@ -5613,6 +5820,7 @@ with tab3:
 
                             df_players.index.name = None
                             df_players.columns.name = None
+
                             def calc_wdl(values):
                                 w = d = l = 0
                                 for v in values:
@@ -5627,7 +5835,7 @@ with tab3:
                                         b = int(right)
                                     except ValueError:
                                         continue
-                            
+
                                     if a > b:
                                         w += 1
                                     elif a == b:
@@ -5635,16 +5843,12 @@ with tab3:
                                     else:
                                         l += 1
                                 return pd.Series([w, d, l], index=["승", "무", "패"])
-                            
+
                             game_cols = ["1게임", "2게임", "3게임", "4게임"]
                             df_players[["승", "무", "패"]] = df_players[game_cols].apply(calc_wdl, axis=1)
-                            
-                            # (원하면 컬럼 순서 바꾸기: 이름 다음에 승무패 나오게)
+
                             df_players = df_players[["이름", "승", "무", "패"] + game_cols]
 
-
-
-                            # 이긴 게임 / 진 게임 색
                             def highlight_win_loss(val):
                                 if not isinstance(val, str):
                                     return ""
@@ -5665,14 +5869,13 @@ with tab3:
                                 else:
                                     return ""
 
-                            game_cols = ["1게임", "2게임", "3게임", "4게임"]
-
                             sty_players = colorize_df_names(df_players, roster_by_name, ["이름"])
                             sty_players = sty_players.applymap(highlight_win_loss, subset=game_cols)
                             smart_table(sty_players)
 
-
-
+                        # =========================================================
+                        # ✅ 개인별 테이블 출력(기존 로직)
+                        # =========================================================
                         if view_mode_scores == "조별 보기 (A/B조)":
                             has_any = False
                             if per_player_A:
@@ -5691,6 +5894,140 @@ with tab3:
                                 st.info("개인별로 표시할 스코어가 없습니다.")
                             else:
                                 render_player_score_table("전체 개인별 스코어", per_player_all)
+
+                        # ✅ 캡처 범위 끝 마커
+                        st.markdown(f'<div id="{capture_id_p}__end"></div>', unsafe_allow_html=True)
+
+                        # =========================================================
+                        # ✅ [개인별 보기] 이미지 저장 버튼만 (JPEG)
+                        #   - start/end 사이 DOM을 복제해서 캡처
+                        # =========================================================
+                        components.html(
+                            f"""
+                            <div style="display:flex; gap:12px; margin-top:14px; align-items:center;">
+                              <button id="{capture_id_p}__save"
+                                style="flex:1; padding:10px 12px; border-radius:10px; border:1px solid rgba(0,0,0,0.15);
+                                       background:white; cursor:pointer; font-weight:700;">
+                                개인별 표 이미지 저장 (JPEG)
+                              </button>
+                              <span id="{capture_id_p}__msg" style="font-size:12px; opacity:0.7;"></span>
+                            </div>
+
+                            <script>
+                            (function() {{
+                              const capId = {json.dumps(capture_id_p)};
+                              const fileName = "개인별표_" + {json.dumps(str(sel_date))}.replace(/[^0-9a-zA-Z_\\-]+/g, "_") + ".jpg";
+
+                              const msgEl  = document.getElementById(capId + "__msg");
+                              const btnSave = document.getElementById(capId + "__save");
+
+                              function setMsg(m) {{
+                                if (msgEl) msgEl.textContent = m;
+                              }}
+
+                              function ensureHtml2Canvas() {{
+                                return new Promise((resolve, reject) => {{
+                                  const p = window.parent;
+                                  if (p && p.html2canvas) {{
+                                    resolve(p.html2canvas);
+                                    return;
+                                  }}
+                                  const ps = p.document.createElement("script");
+                                  ps.src = "https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js";
+                                  ps.onload = () => resolve(p.html2canvas);
+                                  ps.onerror = reject;
+                                  p.document.head.appendChild(ps);
+                                }});
+                              }}
+
+                              if (btnSave) {{
+                                btnSave.onclick = async function() {{
+                                  try {{
+                                    setMsg("이미지 생성중…");
+                                    const pdoc = window.parent.document;
+
+                                    const start = pdoc.getElementById(capId + "__start");
+                                    const end   = pdoc.getElementById(capId + "__end");
+                                    if (!start || !end) {{
+                                      setMsg("캡처 마커를 찾지 못했어.");
+                                      return;
+                                    }}
+
+                                    const startTop = start.closest('div[data-testid="stElementContainer"]')
+                                                  || start.closest('div.element-container')
+                                                  || start.parentElement;
+
+                                    const endTop   = end.closest('div[data-testid="stElementContainer"]')
+                                                  || end.closest('div.element-container')
+                                                  || end.parentElement;
+
+                                    let common = startTop ? startTop.parentElement : null;
+                                    while (common && endTop && !common.contains(endTop)) {{
+                                      common = common.parentElement;
+                                    }}
+                                    if (!common) {{
+                                      setMsg("캡처 범위(공통부모) 찾기 실패");
+                                      return;
+                                    }}
+
+                                    const kids = Array.from(common.children);
+                                    const si = kids.indexOf(startTop);
+                                    const ei = kids.indexOf(endTop);
+
+                                    if (si < 0 || ei < 0 || ei <= si) {{
+                                      setMsg("캡처 범위 인덱스 오류");
+                                      return;
+                                    }}
+
+                                    const wrapper = pdoc.createElement("div");
+                                    wrapper.style.position = "fixed";
+                                    wrapper.style.left = "-100000px";
+                                    wrapper.style.top = "0";
+                                    wrapper.style.background = "#ffffff";
+                                    wrapper.style.width = (common.clientWidth || 1200) + "px";
+                                    wrapper.style.padding = "0";
+                                    wrapper.style.margin = "0";
+
+                                    for (let i = si + 1; i < ei; i++) {{
+                                      wrapper.appendChild(kids[i].cloneNode(true));
+                                    }}
+
+                                    pdoc.body.appendChild(wrapper);
+
+                                    const h2c = await ensureHtml2Canvas();
+                                    const canvas = await h2c(wrapper, {{
+                                      backgroundColor: "#ffffff",
+                                      scale: 2,
+                                      useCORS: true
+                                    }});
+
+                                    wrapper.remove();
+
+                                    const url = canvas.toDataURL("image/jpeg", 0.95);
+                                    const a = pdoc.createElement("a");
+                                    a.href = url;
+                                    a.download = fileName;
+                                    pdoc.body.appendChild(a);
+                                    a.click();
+                                    a.remove();
+
+                                    setMsg("JPEG 저장 완료!");
+                                  }} catch (e) {{
+                                    console.log(e);
+                                    setMsg("저장 실패(콘솔 확인)");
+                                  }}
+                                }};
+                              }}
+                            }})();
+                            </script>
+                            """,
+                            height=80,
+                        )
+
+
+
+
+
         else:
             st.info("이 날짜에는 저장된 대진이 없습니다.")
 
