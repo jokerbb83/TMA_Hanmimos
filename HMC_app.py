@@ -11,60 +11,11 @@ import streamlit as st
 import streamlit.components.v1 as components
 import plotly.express as px
 
-import io
-from google.oauth2 import service_account
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseDownload, MediaIoBaseUpload
-
-
-DRIVE_SCOPES = ["https://www.googleapis.com/auth/drive"]
-
-@st.cache_resource
-def get_drive_service():
-    info = dict(st.secrets["google_service_account"])
-    creds = service_account.Credentials.from_service_account_info(info, scopes=DRIVE_SCOPES)
-    return build("drive", "v3", credentials=creds, cache_discovery=False)
-
-def drive_download_text(file_id: str) -> str:
-    service = get_drive_service()
-    req = service.files().get_media(fileId=file_id, supportsAllDrives=True)
-    fh = io.BytesIO()
-    downloader = MediaIoBaseDownload(fh, req)
-    done = False
-    while not done:
-        _, done = downloader.next_chunk()
-    return fh.getvalue().decode("utf-8")
-
-def drive_upload_text(file_id: str, text: str):
-    service = get_drive_service()
-    media = MediaIoBaseUpload(
-        io.BytesIO(text.encode("utf-8")),
-        mimetype="application/json",
-        resumable=False,
-    )
-    service.files().update(
-        fileId=file_id,
-        media_body=media,
-        supportsAllDrives=True,
-    ).execute()
-
-def load_json_drive(file_id: str, default):
-    try:
-        raw = drive_download_text(file_id)
-        return json.loads(raw) if raw.strip() else default
-    except Exception:
-        return default
-
-def save_json_drive(file_id: str, data):
-    text = json.dumps(data, ensure_ascii=False, indent=2)
-    drive_upload_text(file_id, text)
-
-
 # ---------------------------------------------------------
 # Streamlit 초기화 (✅ 딱 1번만 / 제일 위에서)
 # ---------------------------------------------------------
 st.set_page_config(
-    page_title="HANMIMOS 게임 도우미 (Beta)",
+    page_title="Hanmimos 게임 도우미 (Beta)",
     layout="centered",
     initial_sidebar_state="collapsed",
 )
@@ -286,7 +237,7 @@ AGE_OPTIONS = ["비밀", "20대", "30대", "40대", "50대", "60대", "70대"]
 RACKET_OPTIONS = ["모름", "기타", "윌슨", "요넥스", "헤드", "바볼랏", "던롭", "뵐클", "테크니파이버", "프린스"]
 GENDER_OPTIONS = ["남", "여"]
 HAND_OPTIONS = ["오른손", "왼손"]
-GROUP_OPTIONS = ["미배정(게스트)", "A조", "B조"]
+GROUP_OPTIONS = ["미배정", "A조", "B조"]
 NTRP_OPTIONS = ["모름"] + [f"{x/10:.1f}" for x in range(10, 71)]  # 1.0~7.0 (0.1 step)
 COURT_TYPES = ["인조잔디", "하드", "클레이"]
 SIDE_OPTIONS = ["포(듀스)", "백(애드)"]
@@ -708,21 +659,20 @@ def save_json(path, data):
         json.dump(data, f, ensure_ascii=False, indent=2)
 
 
-PLAYERS_FILE_ID = st.secrets["drive"]["players_file_id"]
-SESSIONS_FILE_ID = st.secrets["drive"]["sessions_file_id"]
-
 def load_players():
-    return load_json_drive(PLAYERS_FILE_ID, [])
+    return load_json(PLAYERS_FILE, [])
+
 
 def save_players(players):
-    save_json_drive(PLAYERS_FILE_ID, players)
+    save_json(PLAYERS_FILE, players)
+
 
 def load_sessions():
-    return load_json_drive(SESSIONS_FILE_ID, {})
+    return load_json(SESSIONS_FILE, {})
+
 
 def save_sessions(sessions):
-    save_json_drive(SESSIONS_FILE_ID, sessions)
-
+    save_json(SESSIONS_FILE, sessions)
 
 
 def render_static_on_mobile(df_or_styler):
@@ -2702,7 +2652,7 @@ roster = st.session_state.roster
 sessions = st.session_state.sessions
 roster_by_name = {p["name"]: p for p in roster}
 
-st.title("🎾 HANMIMOS 게임 도우미 MSA (Beta)")
+st.title("🎾 Hanmimos 게임 도우미 (Beta)")
 
 # 📱 폰에서 볼 때 ON 해두면 A/B조 나란히 레이아웃을 세로로 바꿔줌
 mobile_mode = st.checkbox(
@@ -4918,12 +4868,14 @@ with tab3:
 
             def render_score_inputs_block(title, game_list):
                 """title: 'A조 경기 스코어', 'B조 경기 스코어' 등
+                   if not game_list:
+                       return
                    game_list: [(idx, gtype, t1, t2, court), ...]"""
                 if not game_list:
                     return
 
-                # 🔒 이 날짜의 잠금 상태 (저장본 기준)
-                locked = bool(day_data.get("scores_locked", False))
+                # 🔒 이 날짜의 잠금 상태
+                locked = day_data.get("scores_locked", False)
 
                 # 헤더 색상
                 if ("A조" in title) or ("전체 경기 스코어" in title):
@@ -4936,12 +4888,9 @@ with tab3:
                     color = "#6b7280"   # 회색
                     bg = "#f3f4f6"
 
-                # ✅ 날짜별 잠금 위젯 키 (중요!)
+                # 🔒 이 날짜의 잠금 상태
                 lock_key = f"{sel_date}_scores_locked"
-
-                # ✅ 위젯 렌더 전에만 기본값 주입 (이미 있으면 건드리지 않음)
-                if lock_key not in st.session_state:
-                    st.session_state[lock_key] = locked
+                locked = day_data.get("scores_locked", False)
 
                 # -------------------------------------------------
                 # ✅ 잠금 UI를 "이 날짜에서 딱 한 번만" 보여주기 위한 플래그
@@ -4952,6 +4901,9 @@ with tab3:
                     st.session_state[lock_ui_flag] = False
 
                 # ✅ 잠금 UI를 보여줄 조건
+                # 1) A조 헤더일 때
+                # 2) 전체 경기 스코어 헤더일 때
+                # 3) 위 둘 다 아니어도, 아직 잠금 UI를 한 번도 안 보여줬다면
                 should_show_lock = (
                     ("A조" in title)
                     or ("전체 경기 스코어" in title)
@@ -4962,6 +4914,7 @@ with tab3:
                 # ✅ 헤더 렌더 + 잠금 UI
                 # -------------------------------------------------
                 if should_show_lock:
+                    # 이 날짜에서 잠금 UI가 이미 한 번 렌더됐다고 기록
                     st.session_state[lock_ui_flag] = True
 
                     col_h, col_ck, col_txt = st.columns([8, 1.2, 1.8], vertical_alignment="center")
@@ -4986,10 +4939,11 @@ with tab3:
 
                     with col_ck:
                         scores_locked = st.checkbox(
-                            "scores_locked",              # ✅ 빈값 금지 (화면에는 숨김)
-                            key=lock_key,                 # ✅ 날짜별 키로 고정
-                            value=bool(st.session_state.get(lock_key, locked)),
+                            "",
+                            key=lock_key,
+                            value=locked,
                             label_visibility="collapsed",
+                            help="체크하면 이 날짜의 점수를 수정할 수 없습니다.",
                         )
 
                     with col_txt:
@@ -4998,14 +4952,13 @@ with tab3:
                             unsafe_allow_html=True,
                         )
 
-                    # ✅ 값이 바뀌면 저장
-                    if bool(scores_locked) != locked:
-                        day_data["scores_locked"] = bool(scores_locked)
+                    if scores_locked != locked:
+                        day_data["scores_locked"] = scores_locked
                         sessions[sel_date] = day_data
                         st.session_state.sessions = sessions
                         save_sessions(sessions)
 
-                    locked = bool(scores_locked)
+                    locked = scores_locked
 
                 else:
                     # ✅ 잠금 UI 없이 헤더만 표시
@@ -5508,7 +5461,7 @@ with tab3:
                         "요약 보기 방식",
                         ["대진별 보기", "개인별 보기"],
                         horizontal=True,
-                        key=f"tab3_summary_view_mode_{sel_date}"
+                        key="tab3_summary_view_mode",
                     )
 
                     games_A_sum, games_B_sum, games_other_sum = [], [], []
@@ -5570,12 +5523,14 @@ with tab3:
                         for p in t2:
                             target_dict[p].append(score_t2)
 
-
-
                     if summary_view_mode == "대진별 보기":
 
 
-                                                # =========================================================
+
+
+
+
+                        # =========================================================
                         # ✅ [대진표 캡처 + 텍스트 복사용] 준비 (24칸 들여쓰기)
                         #   - 대진별 보기에서만 동작
                         # =========================================================
@@ -5657,6 +5612,8 @@ with tab3:
 
                         st.markdown(f'<div id="{capture_id}__end"></div>', unsafe_allow_html=True)
 
+
+
                         # =========================================================
                         # ✅ [표 아래] JPEG 저장 + 텍스트 클립보드 복사 버튼
                         #   - start/end 마커 사이 DOM을 복제해서 JPEG 캡처
@@ -5727,7 +5684,6 @@ with tab3:
                                 btnSave.onclick = async function() {{
                                   try {{
                                     setMsg("이미지 생성중…");
-
                                     const pdoc = window.parent.document;
 
                                     const start = pdoc.getElementById(capId + "__start");
@@ -5819,7 +5775,6 @@ with tab3:
                             """,
                             height=90,
                         )
-
 
 
 
@@ -6068,8 +6023,14 @@ with tab3:
                             """,
                             height=80,
                         )
+
+
+
+
+
         else:
             st.info("이 날짜에는 저장된 대진이 없습니다.")
+
 
 
 # =========================================================
