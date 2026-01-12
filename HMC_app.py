@@ -3756,6 +3756,8 @@ with tab2:
             st.session_state.special_match = False
 
     col_ms, col_sp = st.columns([3, 2])
+
+
     with col_sp:
         guest_mode_ui = st.checkbox(
             "👥 게스트 추가",
@@ -3776,6 +3778,37 @@ with tab2:
 
     guest_enabled = bool(st.session_state.guest_mode or st.session_state.special_match)
 
+    # =========================================================
+    # ✅ 게스트 입력칸 초기화: 위젯 렌더 "전에만" 적용(pending 방식)
+    # =========================================================
+    if "_guest_clear_pending" not in st.session_state:
+        st.session_state["_guest_clear_pending"] = False
+
+    def _apply_guest_clear_pending():
+        # 기본값 주입 (위젯 렌더 전이므로 안전)
+        default_ntrp = NTRP_OPTIONS[0] if isinstance(NTRP_OPTIONS, (list, tuple)) and NTRP_OPTIONS else "모름"
+
+        if "guest_name_input" not in st.session_state:
+            st.session_state["guest_name_input"] = ""
+        if "guest_gender_input" not in st.session_state:
+            st.session_state["guest_gender_input"] = "남"
+        if "guest_group_input" not in st.session_state:
+            st.session_state["guest_group_input"] = "미배정"
+        if "guest_ntrp_input" not in st.session_state:
+            st.session_state["guest_ntrp_input"] = default_ntrp
+
+        # pending이 켜져있으면, 이 타이밍(위젯 렌더 전)에만 초기화
+        if st.session_state.get("_guest_clear_pending", False):
+            st.session_state["guest_name_input"] = ""
+            st.session_state["guest_gender_input"] = "남"
+            st.session_state["guest_group_input"] = "미배정"
+            st.session_state["guest_ntrp_input"] = default_ntrp
+            st.session_state["_guest_clear_pending"] = False
+
+
+
+
+
     if not guest_enabled and st.session_state._injected_guest_names:
         for nm in list(st.session_state._injected_guest_names):
             if roster_by_name.get(nm, {}).get("is_guest", False):
@@ -3783,6 +3816,7 @@ with tab2:
         st.session_state._injected_guest_names = []
 
     if guest_enabled:
+        _apply_guest_clear_pending()
         st.markdown(
             """
             <div style="
@@ -3816,6 +3850,7 @@ with tab2:
             add_guest_clicked = st.button("게스트 추가", use_container_width=True, key="btn_add_guest_once")
 
         if add_guest_clicked:
+            _backup_today_players()
             name_clean = (guest_name or "").strip()
             if not name_clean:
                 st.warning("게스트 이름을 입력해 주세요.")
@@ -3828,7 +3863,13 @@ with tab2:
                     )
                     st.session_state.guest_list = guest_list
                     st.session_state["guest_add_msg"] = f"게스트 '{name_clean}' 추가되었습니다."
+
+                    # ✅ 입력칸만 초기화 (pending + rerun)
+                    st.session_state["_guest_clear_pending"] = True
                     safe_rerun()
+
+
+
 
         if st.session_state.get("guest_add_msg"):
             st.success(st.session_state["guest_add_msg"])
@@ -3848,16 +3889,26 @@ with tab2:
                     )
                 with c3:
                     if st.button("삭제", use_container_width=True, key=f"btn_del_guest_{i}"):
+                        _backup_today_players()
                         guest_list.pop(i - 1)
                         st.session_state.guest_list = guest_list
                         safe_rerun()
+
+
 
     guest_names = [g["name"] for g in guest_list] if guest_enabled else []
     names_all = names_all_members + guest_names
     names_sorted = sorted(names_all, key=lambda n: n)
 
+    # ✅ 여기서 복원(멀티셀렉트 생성 전에!)
+    _restore_today_players(names_sorted)
+
+    # ✅ 크래시 방지: 현재 선택값이 옵션에서 빠졌으면 자동 제거
+    _sanitize_multiselect_value("ms_today_players", names_sorted)
+
     with col_ms:
-        sel_players = st.multiselect("오늘 참가 선수들", names_sorted, default=[], key="ms_today_players")
+        # ❗ default=[] 빼고 key만 사용
+        sel_players = st.multiselect("오늘 참가 선수들", names_sorted, key="ms_today_players")
 
     if guest_enabled:
         players_for_today = sorted(set(sel_players) | set(guest_names), key=lambda n: n)
@@ -3883,6 +3934,7 @@ with tab2:
             }
             injected.append(nm)
         st.session_state._injected_guest_names = injected
+
 
     # =========================================================
     # 순서 초기화
