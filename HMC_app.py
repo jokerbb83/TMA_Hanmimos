@@ -5820,8 +5820,6 @@ with tab3:
                             height=90,
                         )
 
-                        with st.expander("대진표 텍스트 미리보기/수동복사"):
-                            st.text_area("대진표 텍스트", fixture_text, height=220)
 
 
 
