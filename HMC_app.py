@@ -3739,7 +3739,20 @@ with tab2:
     guest_list = st.session_state.guest_list
     names_all_members = [p["name"] for p in roster]
 
+
+    def _backup_today_players():
+        cur = st.session_state.get("ms_today_players", [])
+        if isinstance(cur, list):
+            st.session_state["_ms_today_players_backup"] = cur.copy()
+
+    def _restore_today_players(valid_options):
+        if "_ms_today_players_backup" in st.session_state:
+            bk = st.session_state.pop("_ms_today_players_backup", [])
+            valid = set(valid_options)
+            st.session_state["ms_today_players"] = [x for x in bk if x in valid]
+
     def _on_guest_toggle():
+        _backup_today_players()
         if st.session_state.get("chk_guest_mode", False):
             st.session_state["chk_special_match"] = False
             st.session_state.special_match = False
@@ -3748,12 +3761,17 @@ with tab2:
             st.session_state.guest_mode = False
 
     def _on_special_toggle():
+        _backup_today_players()
         if st.session_state.get("chk_special_match", False):
             st.session_state["chk_guest_mode"] = False
             st.session_state.guest_mode = False
             st.session_state.special_match = True
         else:
             st.session_state.special_match = False
+
+
+    col_ms, col_sp = st.columns([3, 2])
+
 
     col_ms, col_sp = st.columns([3, 2])
 
