@@ -3773,9 +3773,6 @@ with tab2:
     col_ms, col_sp = st.columns([3, 2])
 
 
-    col_ms, col_sp = st.columns([3, 2])
-
-
     with col_sp:
         guest_mode_ui = st.checkbox(
             "👥 게스트 추가",
