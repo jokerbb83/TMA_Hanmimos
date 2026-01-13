@@ -2383,6 +2383,42 @@ st.markdown(MOBILE_LANDSCAPE, unsafe_allow_html=True)
 
 
 
+
+
+
+
+
+BUTTON_CSS = """
+<style>
+/* ✅ 기본(민트) 버튼: danger 래퍼 안은 제외 */
+div[data-testid="stButton"]:not(.main-danger-btn) > button,
+div[data-testid="stButton"]:not(.main-primary-btn):not(.main-danger-btn):not(.main-secondary-btn) > button {
+    background-color: #5fcdb2 !important;
+    color: #ffffff !important;
+    font-weight: 600 !important;
+    border: none !important;
+    border-radius: 10px !important;
+    padding: 10px 0 !important;
+    transition: all 0.12s ease-out;
+}
+div[data-testid="stButton"]:not(.main-danger-btn) > button:hover {
+    filter: brightness(1.06) !important;
+    transform: translateY(-1px);
+}
+
+@media (max-width: 768px) {
+    div[data-testid="stButton"]:not(.main-danger-btn) > button {
+        font-size: 0.95rem !important;
+        padding-top: 0.6rem !important;
+        padding-bottom: 0.6rem !important;
+    }
+}
+</style>
+"""
+st.markdown(BUTTON_CSS, unsafe_allow_html=True)
+
+
+
 st.markdown("""
 <style>
 /* ✅ Danger Button (빨강) */
@@ -2411,36 +2447,6 @@ st.markdown("""
 }
 </style>
 """, unsafe_allow_html=True)
-
-
-
-
-
-BUTTON_CSS = """
-<style>
-div[data-testid="stButton"] > button {
-    background-color: #5fcdb2 !important;  /* 보라 */
-    color: #ffffff !important;             /* 흰 글씨 */
-    font-weight: 600 !important;
-    border: none !important;
-    border-radius: 10px !important;
-    padding: 10px 0 !important;
-    transition: all 0.12s ease-out;
-}
-div[data-testid="stButton"] > button:hover {
-    filter: brightness(1.06) !important;
-    transform: translateY(-1px);
-}
-@media (max-width: 768px) {
-    div[data-testid="stButton"] > button {
-        font-size: 0.95rem !important;
-        padding-top: 0.6rem !important;
-        padding-bottom: 0.6rem !important;
-    }
-}
-</style>
-"""
-st.markdown(BUTTON_CSS, unsafe_allow_html=True)
 
 
 
