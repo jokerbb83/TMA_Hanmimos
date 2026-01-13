@@ -11,6 +11,57 @@ import streamlit as st
 import streamlit.components.v1 as components
 import plotly.express as px
 
+
+import base64
+import requests
+
+def github_update_json_file(file_path: str, new_data: dict, commit_message: str = "Update HMC_session.json"):
+    token = st.secrets.get("GITHUB_TOKEN", "")
+    repo = st.secrets.get("GITHUB_REPO", "")
+    branch = st.secrets.get("GITHUB_BRANCH", "main")
+
+    if not token or not repo:
+        raise RuntimeError("GitHub 설정이 없습니다. secrets에 GITHUB_TOKEN/GITHUB_REPO를 넣어주세요.")
+
+    api = f"https://api.github.com/repos/{repo}/contents/{file_path}"
+    headers = {
+        "Authorization": f"token {token}",
+        "Accept": "application/vnd.github+json",
+    }
+
+    # 1) 기존 파일 가져오기 (sha 필요)
+    r = requests.get(api, headers=headers, params={"ref": branch}, timeout=15)
+    if r.status_code != 200:
+        raise RuntimeError(f"GitHub GET 실패: {r.status_code} / {r.text}")
+
+    j = r.json()
+    sha = j.get("sha")
+    if not sha:
+        raise RuntimeError("sha를 찾을 수 없습니다. 파일 경로를 확인하세요.")
+
+    # 2) 새 content 만들기 (base64)
+    new_text = json.dumps(new_data, ensure_ascii=False, indent=2)
+    encoded = base64.b64encode(new_text.encode("utf-8")).decode("utf-8")
+
+    payload = {
+        "message": commit_message,
+        "content": encoded,
+        "sha": sha,
+        "branch": branch,
+    }
+
+    # 3) 업데이트(커밋)
+    r2 = requests.put(api, headers=headers, json=payload, timeout=20)
+    if r2.status_code not in (200, 201):
+        raise RuntimeError(f"GitHub PUT 실패: {r2.status_code} / {r2.text}")
+
+    return r2.json()
+
+
+
+
+
+
 # ---------------------------------------------------------
 # Streamlit 초기화 (✅ 딱 1번만 / 제일 위에서)
 # ---------------------------------------------------------
@@ -1443,7 +1494,7 @@ def get_daily_fortune(sel_player):
     rackets = ["윌슨", "요넥스", "헤드", "바볼랏", "던롭", "뵐클", "테크니파이버", "프린스"]
     ages = ["20대", "30대", "40대", "50대"]
     hands = ["오른손", "왼손"]
-    proplayer = ["페더러","나달","조코비치","야닉시너","알카라즈","손흥민","메시","마이클조던","오타니","이재용","젠슨황","이수옥","지문희","무하마드 알리","타이거 우즈","도널드 트럼프","일론 머스크","샤라포바"]
+    proplayer = ["페더러","나달","조코비치","야닉시너","알카라즈","손흥민","메시","마이클조던","오타니","이학수","이재용","젠슨황","무하마드 알리","타이거 우즈","도널드 트럼프","일론 머스크","샤라포바"]
 
     today = datetime.date.today().strftime("%Y%m%d")
 
@@ -5571,6 +5622,33 @@ mobile_mode = st.session_state.get("mobile_mode", False)
 with tab3:
     section_card("경기 기록 / 통계", "📊")
 
+    st.markdown("---")
+    col_a, col_b = st.columns([2, 3])
+    with col_a:
+        save_to_github_clicked = st.button("✅ 경기기록 저장(GitHub)", use_container_width=True)
+    with col_b:
+        st.caption("현재 기록을 GitHub의 HMC_session.json에 커밋해서 저장합니다.")
+
+    if save_to_github_clicked:
+        try:
+            sessions = st.session_state.get("sessions", {})
+            if not isinstance(sessions, dict):
+                sessions = {}
+
+            # ✅ 저장할 데이터 포맷 (너가 실제로 쓰는 구조에 맞추면 됨)
+            data_to_save = sessions
+
+            res = github_update_json_file(
+                file_path=st.secrets.get("GITHUB_FILE_PATH", "HMC_session.json"),
+                new_data=data_to_save,
+                commit_message="Save match sessions from Streamlit",
+            )
+            st.success("GitHub에 저장 완료! (커밋 생성됨)")
+        except Exception as e:
+            st.error(f"저장 실패: {e}")
+
+
+
     if not sessions:
         st.info("저장된 경기 기록이 없습니다.")
     else:
@@ -7879,4 +7957,3 @@ with tab5:
                     """,
                     unsafe_allow_html=True,
                 )
-
