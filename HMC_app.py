@@ -4844,7 +4844,7 @@ with tab2:
             mode_label = st.selectbox(
                 "복식 대진 방식",
                 doubles_modes,
-                index=3,
+                index=2,
                 key="doubles_mode_select",
                 disabled=is_manual_mode,
             )
