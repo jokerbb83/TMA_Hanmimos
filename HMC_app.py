@@ -2388,65 +2388,95 @@ st.markdown(MOBILE_LANDSCAPE, unsafe_allow_html=True)
 
 
 
-BUTTON_CSS = """
-<style>
-/* ✅ 기본(민트) 버튼: danger 래퍼 안은 제외 */
-div[data-testid="stButton"]:not(.main-danger-btn) > button,
-div[data-testid="stButton"]:not(.main-primary-btn):not(.main-danger-btn):not(.main-secondary-btn) > button {
-    background-color: #5fcdb2 !important;
-    color: #ffffff !important;
-    font-weight: 600 !important;
-    border: none !important;
-    border-radius: 10px !important;
-    padding: 10px 0 !important;
-    transition: all 0.12s ease-out;
-}
-div[data-testid="stButton"]:not(.main-danger-btn) > button:hover {
-    filter: brightness(1.06) !important;
-    transform: translateY(-1px);
-}
-
-@media (max-width: 768px) {
-    div[data-testid="stButton"]:not(.main-danger-btn) > button {
-        font-size: 0.95rem !important;
-        padding-top: 0.6rem !important;
-        padding-bottom: 0.6rem !important;
-    }
-}
-</style>
-"""
-st.markdown(BUTTON_CSS, unsafe_allow_html=True)
-
-
-
 st.markdown("""
 <style>
-/* ✅ Danger Button (빨강) */
-.main-danger-btn button {
-  background: #ef4444 !important;
-  color: white !important;
-  border: 1px solid #ef4444 !important;
+/* =========================================================
+   ✅ 버튼 스타일 통일: wrapper class 기반
+   - 기본 버튼: 중립(회색)
+   - primary: 민트
+   - secondary: 흰색(민트 테두리)
+   - danger: 빨강
+   ========================================================= */
+
+/* Streamlit 버튼 공통(기본) */
+div[data-testid="stButton"] > button {
+  background: #e5e7eb !important;     /* 기본: 회색 */
+  color: #111827 !important;
+  border: 1px solid #e5e7eb !important;
   font-weight: 700 !important;
   border-radius: 14px !important;
   height: 56px !important;
-  box-shadow: 0 8px 18px rgba(239, 68, 68, 0.18) !important;
+  transition: all 0.12s ease-out !important;
 }
 
-.main-danger-btn button:hover {
+/* 기본 hover */
+div[data-testid="stButton"] > button:hover {
+  filter: brightness(0.98) !important;
+  transform: translateY(-1px) !important;
+}
+
+/* 모바일 */
+@media (max-width: 768px) {
+  div[data-testid="stButton"] > button {
+    font-size: 0.95rem !important;
+    height: 52px !important;
+  }
+}
+
+/* ✅ Primary (민트) */
+.main-primary-btn div[data-testid="stButton"] > button {
+  background: #5fcdb2 !important;
+  color: #ffffff !important;
+  border: 1px solid #5fcdb2 !important;
+  box-shadow: 0 8px 18px rgba(95, 205, 178, 0.18) !important;
+}
+.main-primary-btn div[data-testid="stButton"] > button:hover {
+  filter: brightness(1.03) !important;
+}
+
+/* ✅ Secondary (화이트 + 민트 테두리) */
+.main-secondary-btn div[data-testid="stButton"] > button {
+  background: #ffffff !important;
+  color: #10b981 !important;
+  border: 1.5px solid #10b981 !important;
+  box-shadow: 0 8px 18px rgba(16, 185, 129, 0.12) !important;
+}
+.main-secondary-btn div[data-testid="stButton"] > button:hover {
+  background: #ecfdf5 !important;
+}
+
+/* ✅ Danger (빨강) */
+.main-danger-btn div[data-testid="stButton"] > button {
+  background: #ef4444 !important;
+  color: #ffffff !important;
+  border: 1px solid #ef4444 !important;
+  box-shadow: 0 8px 18px rgba(239, 68, 68, 0.18) !important;
+}
+.main-danger-btn div[data-testid="stButton"] > button:hover {
   background: #dc2626 !important;
   border-color: #dc2626 !important;
 }
 
-.main-danger-btn button:active {
-  transform: translateY(1px);
+/* 클릭(눌림) */
+.main-primary-btn div[data-testid="stButton"] > button:active,
+.main-secondary-btn div[data-testid="stButton"] > button:active,
+.main-danger-btn div[data-testid="stButton"] > button:active {
+  transform: translateY(1px) !important;
 }
 
-.main-danger-btn button:focus {
+/* 포커스 */
+.main-primary-btn div[data-testid="stButton"] > button:focus,
+.main-secondary-btn div[data-testid="stButton"] > button:focus,
+.main-danger-btn div[data-testid="stButton"] > button:focus {
   outline: none !important;
+  box-shadow: 0 0 0 4px rgba(16, 185, 129, 0.20) !important;
+}
+.main-danger-btn div[data-testid="stButton"] > button:focus {
   box-shadow: 0 0 0 4px rgba(239, 68, 68, 0.22) !important;
 }
 </style>
 """, unsafe_allow_html=True)
+
 
 
 
