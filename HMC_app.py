@@ -5635,7 +5635,7 @@ with tab3:
             if not isinstance(sessions, dict):
                 sessions = {}
 
-            file_path = st.secrets.get("GITHUB_FILE_PATH", "HMC_session.json")
+            file_path = st.secrets.get("GITHUB_FILE_PATH", "HMC_sessions.json")
             repo = st.secrets.get("GITHUB_REPO", "")
             branch = st.secrets.get("GITHUB_BRANCH", "main")
 
