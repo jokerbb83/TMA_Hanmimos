@@ -3152,10 +3152,9 @@ with tab1:
                 st.session_state.pending_delete = None
 
             with cb1:
-                st.markdown('<div class="main-danger-btn">', unsafe_allow_html=True)
-                if st.button("🗑 이 선수 삭제", use_container_width=True, key="btn_edit_del"):
-                    st.session_state.pending_delete = sel_edit
-                st.markdown("</div>", unsafe_allow_html=True)
+                st.markdown('<div class="main-primary-btn">', unsafe_allow_html=True)
+                if st.button("수정 저장", use_container_width=True, key="btn_edit_save"):
+                    new_name_clean = (e_name or "").strip()
 
                     if not new_name_clean:
                         st.error("이름을 입력해줘.")
@@ -3191,10 +3190,12 @@ with tab1:
                 st.markdown("</div>", unsafe_allow_html=True)
 
             with cb2:
-                               st.markdown('<div class="main-danger-btn">', unsafe_allow_html=True)
+                st.markdown('<div class="main-danger-btn">', unsafe_allow_html=True)
                 if st.button("🗑 이 선수 삭제", use_container_width=True, key="btn_edit_del"):
                     st.session_state.pending_delete = sel_edit
-                st.markdown("</div>", unsafe_allow_html=True)if st.session_state.pending_delete:
+                st.markdown("</div>", unsafe_allow_html=True)
+
+            if st.session_state.pending_delete:
                 st.markdown("---")
                 st.warning(
                     f"⚠️ 정말 **{st.session_state.pending_delete}** 선수를 삭제하시겠습니까?\n\n이 작업은 되돌릴 수 없습니다."
@@ -3223,6 +3224,7 @@ with tab1:
 
     else:
         st.info("수정할 선수가 없습니다.")
+
 
     # -----------------------------------------------------
     # 2) 새 선수 추가 (기본은 접혀 있음)
