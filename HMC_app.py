@@ -12,50 +12,116 @@ import streamlit.components.v1 as components
 import plotly.express as px
 
 
+# =========================================================
+# GitHub JSON 업서트 저장 유틸 (HMC_sessions.json)
+# - Streamlit Secrets에 아래가 있어야 함:
+#   GITHUB_TOKEN, GITHUB_REPO, GITHUB_BRANCH, GITHUB_FILE_PATH
+# =========================================================
 import base64
 import requests
 
-def github_update_json_file(file_path: str, new_data: dict, commit_message: str = "Update HMC_session.json"):
+def _gh_headers(token: str):
+    return {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+
+def github_get_file(repo: str, branch: str, path: str, token: str):
+    """
+    return: (content_dict, sha) or ({}, None) if not exists
+    """
+    url = f"https://api.github.com/repos/{repo}/contents/{path}"
+    params = {"ref": branch} if branch else None
+
+    r = requests.get(url, headers=_gh_headers(token), params=params, timeout=20)
+
+    # 파일이 없으면 새로 만들 수 있게 빈 dict로 리턴
+    if r.status_code == 404:
+        return {}, None
+
+    r.raise_for_status()
+    js = r.json()
+
+    content_b64 = js.get("content", "")
+    sha = js.get("sha")
+
+    if not content_b64:
+        return {}, sha
+
+    raw = base64.b64decode(content_b64).decode("utf-8")
+    try:
+        data = json.loads(raw)
+    except Exception:
+        data = {}
+    return data, sha
+
+def github_put_file(repo: str, branch: str, path: str, token: str, new_data: dict, sha: str | None, message: str):
+    url = f"https://api.github.com/repos/{repo}/contents/{path}"
+
+    raw = json.dumps(new_data, ensure_ascii=False, indent=2)
+    content_b64 = base64.b64encode(raw.encode("utf-8")).decode("utf-8")
+
+    payload = {
+        "message": message,
+        "content": content_b64,
+    }
+    if branch:
+        payload["branch"] = branch
+    if sha:
+        payload["sha"] = sha
+
+    r = requests.put(url, headers=_gh_headers(token), json=payload, timeout=20)
+
+    # 권한/경로/브랜치 문제 등 디버깅용 메시지
+    if r.status_code >= 400:
+        try:
+            return False, f"{r.status_code} / {r.text}"
+        except Exception:
+            return False, f"{r.status_code} / (no body)"
+    return True, None
+
+def github_upsert_json_file(date_key: str, day_payload: dict):
+    """
+    HMC_sessions.json에 date_key(예: '2026-01-13')를 키로 업서트 저장.
+    day_payload 예시:
+      {
+        "schedule": [...],
+        "special_match": false,
+        "court_type": "...",
+        "saved_at": "..."
+      }
+    """
     token = st.secrets.get("GITHUB_TOKEN", "")
     repo = st.secrets.get("GITHUB_REPO", "")
     branch = st.secrets.get("GITHUB_BRANCH", "main")
+    path = st.secrets.get("GITHUB_FILE_PATH", "HMC_sessions.json")
 
     if not token or not repo:
-        raise RuntimeError("GitHub 설정이 없습니다. secrets에 GITHUB_TOKEN/GITHUB_REPO를 넣어주세요.")
+        raise RuntimeError("GITHUB_TOKEN 또는 GITHUB_REPO가 secrets에 없습니다.")
 
-    api = f"https://api.github.com/repos/{repo}/contents/{file_path}"
-    headers = {
-        "Authorization": f"token {token}",
-        "Accept": "application/vnd.github+json",
-    }
+    # 1) 기존 파일 읽기
+    data, sha = github_get_file(repo=repo, branch=branch, path=path, token=token)
 
-    # 1) 기존 파일 가져오기 (sha 필요)
-    r = requests.get(api, headers=headers, params={"ref": branch}, timeout=15)
-    if r.status_code != 200:
-        raise RuntimeError(f"GitHub GET 실패: {r.status_code} / {r.text}")
+    if not isinstance(data, dict):
+        data = {}
 
-    j = r.json()
-    sha = j.get("sha")
-    if not sha:
-        raise RuntimeError("sha를 찾을 수 없습니다. 파일 경로를 확인하세요.")
+    # 2) 업서트
+    data[date_key] = day_payload
 
-    # 2) 새 content 만들기 (base64)
-    new_text = json.dumps(new_data, ensure_ascii=False, indent=2)
-    encoded = base64.b64encode(new_text.encode("utf-8")).decode("utf-8")
+    # 3) 저장(커밋)
+    ok, err = github_put_file(
+        repo=repo,
+        branch=branch,
+        path=path,
+        token=token,
+        new_data=data,
+        sha=sha,
+        message=f"Update sessions {date_key}",
+    )
+    if not ok:
+        raise RuntimeError(f"GitHub 저장 실패: {err}")
 
-    payload = {
-        "message": commit_message,
-        "content": encoded,
-        "sha": sha,
-        "branch": branch,
-    }
-
-    # 3) 업데이트(커밋)
-    r2 = requests.put(api, headers=headers, json=payload, timeout=20)
-    if r2.status_code not in (200, 201):
-        raise RuntimeError(f"GitHub PUT 실패: {r2.status_code} / {r2.text}")
-
-    return r2.json()
 
 
 
