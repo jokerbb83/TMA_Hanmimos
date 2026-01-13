@@ -5635,17 +5635,28 @@ with tab3:
             if not isinstance(sessions, dict):
                 sessions = {}
 
-            # ✅ 저장할 데이터 포맷 (너가 실제로 쓰는 구조에 맞추면 됨)
-            data_to_save = sessions
+            file_path = st.secrets.get("GITHUB_FILE_PATH", "HMC_session.json")
+            repo = st.secrets.get("GITHUB_REPO", "")
+            branch = st.secrets.get("GITHUB_BRANCH", "main")
 
-            res = github_update_json_file(
-                file_path=st.secrets.get("GITHUB_FILE_PATH", "HMC_session.json"),
-                new_data=data_to_save,
+            res = github_upsert_json_file(
+                file_path=file_path,
+                new_data=sessions,
                 commit_message="Save match sessions from Streamlit",
             )
             st.success("GitHub에 저장 완료! (커밋 생성됨)")
+            st.caption(f"저장 위치: {repo} / {branch} / {file_path}")
+
         except Exception as e:
             st.error(f"저장 실패: {e}")
+            st.info(
+                "404가 계속 뜨면 보통 아래 중 하나야:\n"
+                "1) GITHUB_REPO 오타(아이디/레포)\n"
+                "2) GITHUB_FILE_PATH 경로 틀림(data/..)\n"
+                "3) GITHUB_BRANCH가 main이 아님(master 등)\n"
+                "4) 토큰 권한 부족(private repo면 특히)\n"
+            )
+
 
 
 
