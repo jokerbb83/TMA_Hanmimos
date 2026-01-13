@@ -96,7 +96,7 @@
     "age_group": "40대",
     "racket": "윌슨",
     "group": "A조",
-    "ntrp": 7.0,
+    "ntrp": 3.0,
     "mbti": "ENFP"
   },
   {
@@ -347,16 +347,6 @@
     "racket": "모름",
     "group": "B조",
     "ntrp": 2.0,
-    "mbti": "모름"
-  },
-  {
-    "name": "홍길동",
-    "gender": "남",
-    "hand": "오른손",
-    "age_group": "비밀",
-    "racket": "모름",
-    "group": "미배정",
-    "ntrp": null,
     "mbti": "모름"
   }
 ]
