@@ -3013,7 +3013,7 @@ with tab1:
     with col_p2:
         st.caption("선수를 수정/저장/삭제 후 꼭 눌러주세요. 누르지 않으면 언젠가는 수정된 정보가 날아갑니다.저~멀리")
 
-    if _players_github_clicked:
+    if save_players_github_clicked:
         try:
             # ✅ 저장할 roster 확보 (session_state가 단일 소스)
             roster_to_save = st.session_state.get("roster", roster)
