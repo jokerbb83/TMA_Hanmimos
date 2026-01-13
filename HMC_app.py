@@ -2391,16 +2391,16 @@ st.markdown(MOBILE_LANDSCAPE, unsafe_allow_html=True)
 st.markdown("""
 <style>
 /* =========================================================
-   ✅ 버튼 스타일 통일: wrapper class 기반
-   - 기본 버튼: 중립(회색)
+   ✅ 버튼 스타일 통일 (확실히 적용되는 선택자)
+   - 기본: 회색
    - primary: 민트
-   - secondary: 흰색(민트 테두리)
+   - secondary: 흰색 + 민트 테두리
    - danger: 빨강
    ========================================================= */
 
-/* Streamlit 버튼 공통(기본) */
-div[data-testid="stButton"] > button {
-  background: #e5e7eb !important;     /* 기본: 회색 */
+/* 기본 버튼 (전부) */
+div[data-testid="stButton"] button {
+  background: #e5e7eb !important;
   color: #111827 !important;
   border: 1px solid #e5e7eb !important;
   font-weight: 700 !important;
@@ -2409,69 +2409,67 @@ div[data-testid="stButton"] > button {
   transition: all 0.12s ease-out !important;
 }
 
-/* 기본 hover */
-div[data-testid="stButton"] > button:hover {
+div[data-testid="stButton"] button:hover {
   filter: brightness(0.98) !important;
   transform: translateY(-1px) !important;
 }
 
-/* 모바일 */
 @media (max-width: 768px) {
-  div[data-testid="stButton"] > button {
+  div[data-testid="stButton"] button {
     font-size: 0.95rem !important;
     height: 52px !important;
   }
 }
 
-/* ✅ Primary (민트) */
-.main-primary-btn div[data-testid="stButton"] > button {
+/* ✅ Primary */
+.main-primary-btn div[data-testid="stButton"] button {
   background: #5fcdb2 !important;
   color: #ffffff !important;
   border: 1px solid #5fcdb2 !important;
   box-shadow: 0 8px 18px rgba(95, 205, 178, 0.18) !important;
 }
-.main-primary-btn div[data-testid="stButton"] > button:hover {
+.main-primary-btn div[data-testid="stButton"] button:hover {
   filter: brightness(1.03) !important;
 }
 
-/* ✅ Secondary (화이트 + 민트 테두리) */
-.main-secondary-btn div[data-testid="stButton"] > button {
+/* ✅ Secondary */
+.main-secondary-btn div[data-testid="stButton"] button {
   background: #ffffff !important;
   color: #10b981 !important;
   border: 1.5px solid #10b981 !important;
   box-shadow: 0 8px 18px rgba(16, 185, 129, 0.12) !important;
 }
-.main-secondary-btn div[data-testid="stButton"] > button:hover {
+.main-secondary-btn div[data-testid="stButton"] button:hover {
   background: #ecfdf5 !important;
 }
 
-/* ✅ Danger (빨강) */
-.main-danger-btn div[data-testid="stButton"] > button {
+/* ✅ Danger */
+.main-danger-btn div[data-testid="stButton"] button {
   background: #ef4444 !important;
   color: #ffffff !important;
   border: 1px solid #ef4444 !important;
   box-shadow: 0 8px 18px rgba(239, 68, 68, 0.18) !important;
 }
-.main-danger-btn div[data-testid="stButton"] > button:hover {
+.main-danger-btn div[data-testid="stButton"] button:hover {
   background: #dc2626 !important;
   border-color: #dc2626 !important;
 }
 
-/* 클릭(눌림) */
-.main-primary-btn div[data-testid="stButton"] > button:active,
-.main-secondary-btn div[data-testid="stButton"] > button:active,
-.main-danger-btn div[data-testid="stButton"] > button:active {
+/* 눌림 */
+.main-primary-btn div[data-testid="stButton"] button:active,
+.main-secondary-btn div[data-testid="stButton"] button:active,
+.main-danger-btn div[data-testid="stButton"] button:active {
   transform: translateY(1px) !important;
 }
 
 /* 포커스 */
-.main-primary-btn div[data-testid="stButton"] > button:focus,
-.main-secondary-btn div[data-testid="stButton"] > button:focus,
-.main-danger-btn div[data-testid="stButton"] > button:focus {
+.main-primary-btn div[data-testid="stButton"] button:focus,
+.main-secondary-btn div[data-testid="stButton"] button:focus {
   outline: none !important;
   box-shadow: 0 0 0 4px rgba(16, 185, 129, 0.20) !important;
 }
-.main-danger-btn div[data-testid="stButton"] > button:focus {
+.main-danger-btn div[data-testid="stButton"] button:focus {
+  outline: none !important;
   box-shadow: 0 0 0 4px rgba(239, 68, 68, 0.22) !important;
 }
 </style>
@@ -3071,7 +3069,7 @@ with tab1:
         save_players_github_clicked = st.button("✅ 선수정보 저장", use_container_width=True, key="btn_save_players_github")
 
     with col_p2:
-        st.caption("현재 선수 정보를 저장합니다. 저장 버튼을 누르지 않으면 언젠가는 수정된 정보가 날아갑니다.")
+        st.caption("현재 선수 정보를 저장합니다. 저장 버튼을 누르지 않으면 언젠가는 수정된 정보가 날아갑니다.저~멀리")
 
     if save_players_github_clicked:
         try:
@@ -5767,7 +5765,7 @@ with tab3:
         save_to_github_clicked = st.button("✅ 경기기록 저장", use_container_width=True)
 
     with col_b:
-        st.caption("경기기록 생성과 수정후 꼭 버튼을 눌러주세요. 안 누르면 다 날아감")
+        st.caption("경기기록 생성과 수정후 꼭 버튼을 눌러주세요. 안 누르면 다 날아갑니다.저~멀리")
 
     if save_to_github_clicked:
         try:
