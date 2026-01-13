@@ -5654,10 +5654,10 @@ with tab3:
 
     col_a, col_b = st.columns([2, 3])
     with col_a:
-        save_to_github_clicked = st.button("✅ 경기기록 저장(GitHub)", use_container_width=True)
+        save_to_github_clicked = st.button("✅ 경기기록 저장", use_container_width=True)
 
     with col_b:
-        st.caption("현재 기록을 GitHub의 HMC_sessions.json에 커밋해서 저장합니다.")
+        st.caption("경기기록 생성과 수정후 꼭 버튼을 눌러주세요. 안 누르면 다 날아감")
 
     if save_to_github_clicked:
         try:
