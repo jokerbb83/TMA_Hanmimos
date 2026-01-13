@@ -5689,9 +5689,19 @@ with tab3:
     section_card("경기 기록 / 통계", "📊")
 
     st.markdown("---")
+
+
     col_a, col_b = st.columns([2, 3])
     with col_a:
         save_to_github_clicked = st.button("✅ 경기기록 저장(GitHub)", use_container_width=True)
+
+        with st.expander("🔧 GitHub 디버그(개발용)", expanded=False):
+            st.write("REPO:", st.secrets.get("GITHUB_REPO", ""))
+            st.write("BRANCH:", st.secrets.get("GITHUB_BRANCH", ""))
+            st.write("PATH:", st.secrets.get("GITHUB_FILE_PATH", ""))
+            tok = st.secrets.get("GITHUB_TOKEN", "")
+            st.write("TOKEN 존재?", bool(tok), "길이:", len(tok))
+
     with col_b:
         st.caption("현재 기록을 GitHub의 HMC_session.json에 커밋해서 저장합니다.")
 
