@@ -4897,7 +4897,7 @@ with tab2:
             total_rounds = st.number_input(
                 "총 게임 수 (라운드 수)",
                 min_value=1, max_value=80,
-                value=int(st.session_state.get("total_rounds_input", 2)),
+                value=int(st.session_state.get("total_rounds_input", 4)),
                 step=1, key="total_rounds_input",
                 help="수동 배정 또는 자동 생성(총 게임 수 기준)일 때 입력합니다.",
             )
