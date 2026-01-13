@@ -5709,7 +5709,7 @@ with tab3:
     with col_b:
         st.caption("경기기록 생성과 수정후 꼭 버튼을 눌러주세요. 안 누르면 다 날아갑니다.저~멀리")
 
-    _to_github_clicked:
+    if _to_github_clicked:
         try:
             sessions = st.session_state.get("sessions", {})
             if not isinstance(sessions, dict):
