@@ -2990,6 +2990,52 @@ with tab1:
 
 
 
+    # =========================================================
+    # ✅ 선수 정보 GitHub 저장 버튼 (HMC_players.json)
+    #   - "선수 정보 수정 / 삭제" 위에 배치
+    # =========================================================
+    st.markdown("---")
+
+    col_p1, col_p2 = st.columns([2, 3])
+    with col_p1:
+        save_players_github_clicked = st.button("✅ 선수정보 저장(GitHub)", use_container_width=True, key="btn_save_players_github")
+
+        with st.expander("🔧 GitHub 디버그(Players)", expanded=False):
+            st.write("REPO:", st.secrets.get("GITHUB_REPO", ""))
+            st.write("BRANCH:", st.secrets.get("GITHUB_BRANCH", ""))
+            st.write("PLAYERS PATH:", st.secrets.get("GITHUB_PLAYERS_FILE_PATH", "HMC_players.json"))
+            tok = st.secrets.get("GITHUB_TOKEN", "")
+            st.write("TOKEN 존재?", bool(tok), "길이:", len(tok))
+
+    with col_p2:
+        st.caption("현재 선수 정보를 GitHub의 HMC_players.json에 커밋해서 저장합니다.")
+
+    if save_players_github_clicked:
+        try:
+            # ✅ 저장할 roster 확보 (session_state가 단일 소스)
+            roster_to_save = st.session_state.get("roster", roster)
+            if not isinstance(roster_to_save, list):
+                roster_to_save = roster if isinstance(roster, list) else []
+
+            file_path_players = st.secrets.get("GITHUB_PLAYERS_FILE_PATH", "HMC_players.json")
+            repo = st.secrets.get("GITHUB_REPO", "")
+            branch = st.secrets.get("GITHUB_BRANCH", "main")
+
+            res = github_upsert_json_file(
+                file_path=file_path_players,
+                new_data=roster_to_save,
+                commit_message="Save players from Streamlit",
+                repo=repo,
+                branch=branch,
+            )
+            st.success("GitHub에 선수정보 저장 완료! (커밋 생성됨)")
+            st.caption(f"저장 위치: {repo} / {branch} / {file_path_players}")
+
+        except Exception as e:
+            st.error(f"저장 실패: {e}")
+
+
+
     # -----------------------------------------------------
     # 1) 선수 정보 수정 / 삭제
     # -----------------------------------------------------
