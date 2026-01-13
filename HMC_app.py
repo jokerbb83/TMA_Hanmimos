@@ -2382,6 +2382,40 @@ st.markdown(MOBILE_LANDSCAPE, unsafe_allow_html=True)
 
 
 
+
+st.markdown("""
+<style>
+/* ✅ Danger Button (빨강) */
+.main-danger-btn button {
+  background: #ef4444 !important;
+  color: white !important;
+  border: 1px solid #ef4444 !important;
+  font-weight: 700 !important;
+  border-radius: 14px !important;
+  height: 56px !important;
+  box-shadow: 0 8px 18px rgba(239, 68, 68, 0.18) !important;
+}
+
+.main-danger-btn button:hover {
+  background: #dc2626 !important;
+  border-color: #dc2626 !important;
+}
+
+.main-danger-btn button:active {
+  transform: translateY(1px);
+}
+
+.main-danger-btn button:focus {
+  outline: none !important;
+  box-shadow: 0 0 0 4px rgba(239, 68, 68, 0.22) !important;
+}
+</style>
+""", unsafe_allow_html=True)
+
+
+
+
+
 BUTTON_CSS = """
 <style>
 div[data-testid="stButton"] > button {
@@ -2998,17 +3032,10 @@ with tab1:
 
     col_p1, col_p2 = st.columns([2, 3])
     with col_p1:
-        save_players_github_clicked = st.button("✅ 선수정보 저장(GitHub)", use_container_width=True, key="btn_save_players_github")
-
-        with st.expander("🔧 GitHub 디버그(Players)", expanded=False):
-            st.write("REPO:", st.secrets.get("GITHUB_REPO", ""))
-            st.write("BRANCH:", st.secrets.get("GITHUB_BRANCH", ""))
-            st.write("PLAYERS PATH:", st.secrets.get("GITHUB_PLAYERS_FILE_PATH", "HMC_players.json"))
-            tok = st.secrets.get("GITHUB_TOKEN", "")
-            st.write("TOKEN 존재?", bool(tok), "길이:", len(tok))
+        save_players_github_clicked = st.button("✅ 선수정보 저장", use_container_width=True, key="btn_save_players_github")
 
     with col_p2:
-        st.caption("현재 선수 정보를 GitHub의 HMC_players.json에 커밋해서 저장합니다.")
+        st.caption("현재 선수 정보를 저장합니다. 저장 버튼을 누르지 않으면 언젠가는 수정된 정보가 날아갑니다.")
 
     if save_players_github_clicked:
         try:
@@ -3191,6 +3218,7 @@ with tab1:
                 if st.button("🗑 이 선수 삭제", use_container_width=True, key="btn_edit_del"):
                     st.session_state.pending_delete = sel_edit
                 st.markdown("</div>", unsafe_allow_html=True)
+
 
             if st.session_state.pending_delete:
                 st.markdown("---")
