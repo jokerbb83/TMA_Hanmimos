@@ -3152,9 +3152,10 @@ with tab1:
                 st.session_state.pending_delete = None
 
             with cb1:
-                st.markdown('<div class="main-primary-btn">', unsafe_allow_html=True)
-                if st.button("수정 저장", use_container_width=True, key="btn_edit_save"):
-                    new_name_clean = (e_name or "").strip()
+                st.markdown('<div class="main-danger-btn">', unsafe_allow_html=True)
+                if st.button("🗑 이 선수 삭제", use_container_width=True, key="btn_edit_del"):
+                    st.session_state.pending_delete = sel_edit
+                st.markdown("</div>", unsafe_allow_html=True)
 
                     if not new_name_clean:
                         st.error("이름을 입력해줘.")
