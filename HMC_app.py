@@ -18,109 +18,70 @@ import plotly.express as px
 #   GITHUB_TOKEN, GITHUB_REPO, GITHUB_BRANCH, GITHUB_FILE_PATH
 # =========================================================
 import base64
+import json
 import requests
+import streamlit as st
 
-def _gh_headers(token: str):
-    return {
-        "Authorization": f"Bearer {token}",
+def github_upsert_json_file(
+    file_path: str,
+    new_data: dict,
+    commit_message: str = "Update json",
+    repo: str | None = None,
+    branch: str | None = None,
+    token: str | None = None,
+):
+    """
+    GitHub의 file_path(JSON)를 new_data로 덮어쓰기 커밋한다.
+    - file_path: "HMC_sessions.json"
+    - new_data: dict (예: sessions 전체)
+    """
+    token = token or st.secrets.get("GITHUB_TOKEN", "")
+    repo = repo or st.secrets.get("GITHUB_REPO", "")
+    branch = branch or st.secrets.get("GITHUB_BRANCH", "main")
+
+    if not token:
+        raise RuntimeError("GITHUB_TOKEN이 secrets에 없습니다.")
+    if not repo:
+        raise RuntimeError("GITHUB_REPO가 secrets에 없습니다.")
+    if not file_path:
+        raise RuntimeError("file_path가 비었습니다.")
+
+    api = f"https://api.github.com/repos/{repo}/contents/{file_path}"
+    headers = {
+        "Authorization": f"token {token}",
         "Accept": "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2022-11-28",
     }
 
-def github_get_file(repo: str, branch: str, path: str, token: str):
-    """
-    return: (content_dict, sha) or ({}, None) if not exists
-    """
-    url = f"https://api.github.com/repos/{repo}/contents/{path}"
-    params = {"ref": branch} if branch else None
+    # 1) 기존 파일 sha 가져오기 (업데이트하려면 sha 필요)
+    sha = None
+    r = requests.get(api, headers=headers, params={"ref": branch}, timeout=20)
+    if r.status_code == 200:
+        sha = r.json().get("sha")
+    elif r.status_code == 404:
+        # 파일이 없으면 생성(sha 없이 PUT)
+        sha = None
+    else:
+        raise RuntimeError(f"GitHub GET 실패: {r.status_code} / {r.text}")
 
-    r = requests.get(url, headers=_gh_headers(token), params=params, timeout=20)
-
-    # 파일이 없으면 새로 만들 수 있게 빈 dict로 리턴
-    if r.status_code == 404:
-        return {}, None
-
-    r.raise_for_status()
-    js = r.json()
-
-    content_b64 = js.get("content", "")
-    sha = js.get("sha")
-
-    if not content_b64:
-        return {}, sha
-
-    raw = base64.b64decode(content_b64).decode("utf-8")
-    try:
-        data = json.loads(raw)
-    except Exception:
-        data = {}
-    return data, sha
-
-def github_put_file(repo: str, branch: str, path: str, token: str, new_data: dict, sha: str | None, message: str):
-    url = f"https://api.github.com/repos/{repo}/contents/{path}"
-
+    # 2) 새 내용 base64 인코딩
     raw = json.dumps(new_data, ensure_ascii=False, indent=2)
     content_b64 = base64.b64encode(raw.encode("utf-8")).decode("utf-8")
 
     payload = {
-        "message": message,
+        "message": commit_message,
         "content": content_b64,
+        "branch": branch,
     }
-    if branch:
-        payload["branch"] = branch
     if sha:
         payload["sha"] = sha
 
-    r = requests.put(url, headers=_gh_headers(token), json=payload, timeout=20)
+    # 3) PUT (커밋)
+    r2 = requests.put(api, headers=headers, json=payload, timeout=20)
+    if r2.status_code not in (200, 201):
+        raise RuntimeError(f"GitHub PUT 실패: {r2.status_code} / {r2.text}")
 
-    # 권한/경로/브랜치 문제 등 디버깅용 메시지
-    if r.status_code >= 400:
-        try:
-            return False, f"{r.status_code} / {r.text}"
-        except Exception:
-            return False, f"{r.status_code} / (no body)"
-    return True, None
+    return r2.json()
 
-def github_upsert_json_file(date_key: str, day_payload: dict):
-    """
-    HMC_sessions.json에 date_key(예: '2026-01-13')를 키로 업서트 저장.
-    day_payload 예시:
-      {
-        "schedule": [...],
-        "special_match": false,
-        "court_type": "...",
-        "saved_at": "..."
-      }
-    """
-    token = st.secrets.get("GITHUB_TOKEN", "")
-    repo = st.secrets.get("GITHUB_REPO", "")
-    branch = st.secrets.get("GITHUB_BRANCH", "main")
-    path = st.secrets.get("GITHUB_FILE_PATH", "HMC_sessions.json")
-
-    if not token or not repo:
-        raise RuntimeError("GITHUB_TOKEN 또는 GITHUB_REPO가 secrets에 없습니다.")
-
-    # 1) 기존 파일 읽기
-    data, sha = github_get_file(repo=repo, branch=branch, path=path, token=token)
-
-    if not isinstance(data, dict):
-        data = {}
-
-    # 2) 업서트
-    data[date_key] = day_payload
-
-    # 3) 저장(커밋)
-    ok, err = github_put_file(
-        repo=repo,
-        branch=branch,
-        path=path,
-        token=token,
-        new_data=data,
-        sha=sha,
-        message=f"Update sessions {date_key}",
-    )
-    if not ok:
-        raise RuntimeError(f"GitHub 저장 실패: {err}")
 
 
 
@@ -5703,7 +5664,7 @@ with tab3:
             st.write("TOKEN 존재?", bool(tok), "길이:", len(tok))
 
     with col_b:
-        st.caption("현재 기록을 GitHub의 HMC_session.json에 커밋해서 저장합니다.")
+        st.caption("현재 기록을 GitHub의 HMC_sessions.json에 커밋해서 저장합니다.")
 
     if save_to_github_clicked:
         try:
