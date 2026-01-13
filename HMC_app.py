@@ -3031,7 +3031,7 @@ with tab1:
                 repo=repo,
                 branch=branch,
             )
-            st.success("GitHub에 선수정보 저장 완료! (커밋 생성됨)")
+            st.success("선수정보 저장 완료!")
             st.caption(f"저장 위치: {repo} / {branch} / {file_path_players}")
 
         except Exception as e:
@@ -5724,7 +5724,7 @@ with tab3:
                 new_data=sessions,
                 commit_message="Save match sessions from Streamlit",
             )
-            st.success("GitHub에 저장 완료! (커밋 생성됨)")
+            st.success("저장 완료! (커밋 생성됨)")
             st.caption(f"저장 위치: {repo} / {branch} / {file_path}")
 
         except Exception as e:
