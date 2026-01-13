@@ -3032,7 +3032,6 @@ with tab1:
                 branch=branch,
             )
             st.success("선수정보 저장 완료!")
-            st.caption(f"저장 위치: {repo} / {branch} / {file_path_players}")
 
         except Exception as e:
             st.error(f"저장 실패: {e}")
