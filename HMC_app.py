@@ -162,6 +162,13 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
+def safe_rerun():
+    if hasattr(st, "rerun"):
+        st.rerun()
+    elif hasattr(st, "experimental_rerun"):
+        st.experimental_rerun()
+
+
 components.html(
     """
 <script>
@@ -5033,6 +5040,7 @@ def render_tab_today_session(tab):
                     my_current = picks_state.get(team, [])
                     team_options = sorted(set(players_selected) - picked_others | set(my_current))
 
+
                     picked = st.multiselect(
                         f"{team}팀 선수 선택",
                         options=team_options,                 # ✅ 여기!
@@ -5995,6 +6003,8 @@ with tab3:
                 save_sessions(sessions)
                 st.caption("🏟️ 코트 종류가 저장되었습니다.")
 
+
+
         # 날짜 전체일 때는 라디오 숨기고 자동 전체로
         if sel_date == "전체":
             view_mode_scores = "전체"
@@ -6026,6 +6036,8 @@ with tab3:
                         sessions[sel_date] = day_data
                         st.session_state.sessions = sessions
                         save_sessions(sessions)
+
+
 
 
         # 나중에 다시 그리기 위한 요약 컨테이너
@@ -7387,6 +7399,9 @@ with tab3:
                         )
 
                         col_swap, col_reorder = st.columns(2)
+
+
+
                         # -----------------------------
                         # (A) 선수 이름 일괄 교체 + (A-2) 한 게임만 선수 변경
                         # -----------------------------
@@ -7402,12 +7417,19 @@ with tab3:
                                     )
 
                                     # 새 선수 후보: roster가 있으면 roster 우선, 없으면 day_names로
-                                    new_options = roster_names if roster_names else day_names
-                                    new_name = st.selectbox(
-                                        "변경할 선수(새)",
-                                        new_options,
-                                        key=f"swap_new_{sel_date}",
-                                    )
+                                    _base_new_options = roster_names if roster_names else day_names
+                                    new_options = [x for x in _base_new_options if x != old_name]
+
+                                    if not new_options:
+                                        st.warning("바꿀 수 있는 다른 선수가 없어. 선수 목록(로스터)을 먼저 확인해줘.")
+                                        new_name = old_name
+                                    else:
+                                        new_name = st.selectbox(
+                                            "변경할 선수(새)",
+                                            new_options,
+                                            key=f"swap_new_{sel_date}",
+                                        )
+
 
                                     c1, c2 = st.columns([2, 3])
                                     with c1:
@@ -7482,13 +7504,37 @@ with tab3:
                                             cur_names.extend([x for x in _team if x])
                                         elif _team:
                                             cur_names.append(_team)
-                                    options = sorted(set(base_opts) | set(cur_names))
+                                    options = sorted(
+                                        {x for x in (set(base_opts) | set(cur_names) | {"게스트"}) if str(x).strip() != ""}
+                                    )
 
-                                    def _idx(opts, val):
-                                        try:
-                                            return opts.index(val)
-                                        except Exception:
-                                            return 0
+
+
+                                    # ✅ 게스트 맨 위 옵션 구성
+                                    def _guest_first(opts):
+                                        s = [x for x in opts if str(x).strip() != "" and x is not None]
+                                        s = sorted(set(s))
+                                        if "게스트" in s:
+                                            s.remove("게스트")
+                                        return ["게스트"] + s
+
+                                    def _slot_options(master_opts, current_val, other_selected_set):
+                                        # 다른 슬롯에서 이미 선택된 선수는 제외(단, 현재 값은 유지)
+                                        blocked = set(other_selected_set or set())
+                                        blocked.discard(current_val)
+
+                                        out = [x for x in master_opts if (x == current_val) or (x not in blocked)]
+
+                                        # 혹시 current_val이 master에 없으면(드물지만) 강제로 넣어줌
+                                        if current_val and current_val not in out:
+                                            if out and out[0] == "게스트":
+                                                out.insert(1, current_val)
+                                            else:
+                                                out.insert(0, current_val)
+                                        return out
+
+                                    options_master = _guest_first(options)
+
 
                                     # 단식/복식 구분(안전)
                                     is_singles = (gtype_g == "단식")
@@ -7503,62 +7549,124 @@ with tab3:
                                         p1 = t1_g[0] if isinstance(t1_g, (list, tuple)) and len(t1_g) > 0 else ""
                                         p2 = t2_g[0] if isinstance(t2_g, (list, tuple)) and len(t2_g) > 0 else ""
 
+                                        # ✅ 키
+                                        k1 = f"edit_g_{sel_date}_{edit_game_no}_p1"
+                                        k2 = f"edit_g_{sel_date}_{edit_game_no}_p2"
+
+                                        # ✅ 디폴트는 원래 선수
+                                        if k1 not in st.session_state:
+                                            st.session_state[k1] = p1
+                                        if k2 not in st.session_state:
+                                            st.session_state[k2] = p2
+
+                                        cur1 = st.session_state.get(k1, p1)
+                                        cur2 = st.session_state.get(k2, p2)
+
                                         cA, cB = st.columns(2)
                                         with cA:
+                                            other_for_1 = {cur2}
+                                            opts1 = _slot_options(options_master, cur1, other_for_1)
                                             new_p1 = st.selectbox(
                                                 "팀1 선수",
-                                                options,
-                                                index=_idx(options, p1) if options else 0,
-                                                key=f"edit_g_{sel_date}_{edit_game_no}_p1",
+                                                opts1,
+                                                index=opts1.index(cur1) if cur1 in opts1 else 0,
+                                                key=k1,
                                             )
+
                                         with cB:
+                                            cur1_now = st.session_state.get(k1, cur1)
+                                            other_for_2 = {cur1_now}
+                                            cur2_now = st.session_state.get(k2, cur2)
+                                            opts2 = _slot_options(options_master, cur2_now, other_for_2)
                                             new_p2 = st.selectbox(
                                                 "팀2 선수",
-                                                options,
-                                                index=_idx(options, p2) if options else 0,
-                                                key=f"edit_g_{sel_date}_{edit_game_no}_p2",
+                                                opts2,
+                                                index=opts2.index(cur2_now) if cur2_now in opts2 else 0,
+                                                key=k2,
                                             )
 
                                         new_t1 = (new_p1,)
                                         new_t2 = (new_p2,)
+
+
+
                                     else:
                                         p11 = t1_g[0] if len(t1_g) > 0 else ""
                                         p12 = t1_g[1] if len(t1_g) > 1 else ""
                                         p21 = t2_g[0] if len(t2_g) > 0 else ""
                                         p22 = t2_g[1] if len(t2_g) > 1 else ""
 
+                                        # ✅ 각 자리 key
+                                        k11 = f"edit_g_{sel_date}_{edit_game_no}_p11"
+                                        k12 = f"edit_g_{sel_date}_{edit_game_no}_p12"
+                                        k21 = f"edit_g_{sel_date}_{edit_game_no}_p21"
+                                        k22 = f"edit_g_{sel_date}_{edit_game_no}_p22"
+
+                                        # ✅ 디폴트는 "원래 선수"가 선택되게 session_state 선채움
+                                        if k11 not in st.session_state: st.session_state[k11] = p11
+                                        if k12 not in st.session_state: st.session_state[k12] = p12
+                                        if k21 not in st.session_state: st.session_state[k21] = p21
+                                        if k22 not in st.session_state: st.session_state[k22] = p22
+
+                                        # ✅ 현재 선택값(유저가 바꿨으면 그 값)
+                                        cur11 = st.session_state.get(k11, p11)
+                                        cur12 = st.session_state.get(k12, p12)
+                                        cur21 = st.session_state.get(k21, p21)
+                                        cur22 = st.session_state.get(k22, p22)
+
                                         c1a, c1b = st.columns(2)
+
                                         with c1a:
                                             st.caption("팀1")
+                                            # 다른 슬롯에서 이미 선택된 선수는 옵션에서 제외
+                                            other_for_11 = {cur12, cur21, cur22}
+                                            opts11 = _slot_options(options_master, cur11, other_for_11)
                                             new_p11 = st.selectbox(
                                                 "팀1-1",
-                                                options,
-                                                index=_idx(options, p11) if options else 0,
-                                                key=f"edit_g_{sel_date}_{edit_game_no}_p11",
+                                                opts11,
+                                                index=opts11.index(cur11) if cur11 in opts11 else 0,
+                                                key=k11,
                                             )
+
+                                            other_for_12 = {st.session_state.get(k11, cur11), cur21, cur22}
+                                            cur12_now = st.session_state.get(k12, cur12)
+                                            opts12 = _slot_options(options_master, cur12_now, other_for_12)
                                             new_p12 = st.selectbox(
                                                 "팀1-2",
-                                                options,
-                                                index=_idx(options, p12) if options else 0,
-                                                key=f"edit_g_{sel_date}_{edit_game_no}_p12",
+                                                opts12,
+                                                index=opts12.index(cur12_now) if cur12_now in opts12 else 0,
+                                                key=k12,
                                             )
+
                                         with c1b:
                                             st.caption("팀2")
+                                            cur11_now = st.session_state.get(k11, cur11)
+                                            cur12_now = st.session_state.get(k12, cur12)
+
+                                            other_for_21 = {cur11_now, cur12_now, cur22}
+                                            cur21_now = st.session_state.get(k21, cur21)
+                                            opts21 = _slot_options(options_master, cur21_now, other_for_21)
                                             new_p21 = st.selectbox(
                                                 "팀2-1",
-                                                options,
-                                                index=_idx(options, p21) if options else 0,
-                                                key=f"edit_g_{sel_date}_{edit_game_no}_p21",
+                                                opts21,
+                                                index=opts21.index(cur21_now) if cur21_now in opts21 else 0,
+                                                key=k21,
                                             )
+
+                                            cur21_now = st.session_state.get(k21, cur21_now)
+                                            other_for_22 = {cur11_now, cur12_now, cur21_now}
+                                            cur22_now = st.session_state.get(k22, cur22)
+                                            opts22 = _slot_options(options_master, cur22_now, other_for_22)
                                             new_p22 = st.selectbox(
                                                 "팀2-2",
-                                                options,
-                                                index=_idx(options, p22) if options else 0,
-                                                key=f"edit_g_{sel_date}_{edit_game_no}_p22",
+                                                opts22,
+                                                index=opts22.index(cur22_now) if cur22_now in opts22 else 0,
+                                                key=k22,
                                             )
 
                                         new_t1 = (new_p11, new_p12)
                                         new_t2 = (new_p21, new_p22)
+
 
                                     apply_one_game = st.button(
                                         "✅ 이 게임만 변경 적용",
@@ -7568,106 +7676,138 @@ with tab3:
                                     st.caption("※ 선택한 1게임만 선수 구성을 바꿉니다. 점수는 그대로 유지됩니다.")
 
                                     if apply_one_game:
-                                        chosen = [x for x in (list(new_t1) + list(new_t2)) if x]
-                                        if len(chosen) != len(set(chosen)):
-                                            st.warning("같은 선수가 한 게임에 중복되어 있어. 확인해줘.")
-                                        else:
-                                            # 원래 타입 유지(list/tuple)
-                                            def _as_type(orig, tpl):
-                                                if isinstance(orig, list):
-                                                    return list(tpl)
-                                                if isinstance(orig, tuple):
-                                                    return tuple(tpl)
-                                                return tpl
+                                        chosen_raw = list(new_t1) + list(new_t2)
 
-                                            new_schedule = list(_sched_now)
-                                            new_schedule[edit_game_no - 1] = (
-                                                gtype_g,
-                                                _as_type(t1_g, new_t1),
-                                                _as_type(t2_g, new_t2),
-                                                court_g,
-                                            )
+                                        # ✅ (선택)이 남아있으면 적용 금지
+                                        if any((x == "(선택)") for x in chosen_raw):
+                                            st.warning("아직 선택 안 한 자리가 있어. 전부 선택해줘.")
+                                        else:
+                                            chosen = [x for x in chosen_raw if x]
+                                            if len(chosen) != len(set(chosen)):
+                                                st.warning("같은 선수가 한 게임에 중복되어 있어. 확인해줘.")
+                                            else:
+                                                # 원래 타입 유지(list/tuple)
+                                                def _as_type(orig, tpl):
+                                                    if isinstance(orig, list):
+                                                        return list(tpl)
+                                                    if isinstance(orig, tuple):
+                                                        return tuple(tpl)
+                                                    return tpl
+
+                                                new_schedule = list(_sched_now)
+                                                new_schedule[edit_game_no - 1] = (
+                                                    gtype_g,
+                                                    _as_type(t1_g, new_t1),
+                                                    _as_type(t2_g, new_t2),
+                                                    court_g,
+                                                )
+
+                                                day_data["schedule"] = new_schedule
+                                                sessions[sel_date] = day_data
+                                                st.session_state.sessions = sessions
+                                                save_sessions(sessions)
+
+                                                st.session_state["_flash_day_edit_msg"] = f"✅ {edit_game_no}번 게임 선수 변경 완료!"
+                                                safe_rerun()
+
+
+                        # -----------------------------
+                        # (B) 게임(경기) 순서 변경 (무조건 서로 교환/스왑)
+                        #     - 선수/대진/코트는 그대로
+                        #     - 결과(results)도 함께 교환
+                        # -----------------------------
+                        with col_reorder:
+                            with st.expander("🔀 게임 순서 변경", expanded=False):
+                                n_games = len(_sched_now)
+
+                                def _team_join(team):
+                                    if isinstance(team, (list, tuple)):
+                                        return " / ".join([str(x) for x in team if str(x).strip() != ""])
+                                    return str(team) if team is not None else ""
+
+                                labels = []
+                                for i, (gtype, t1, t2, court) in enumerate(_sched_now, start=1):
+                                    labels.append(f"{i}번 ({gtype}, 코트 {court})  {_team_join(t1)} vs {_team_join(t2)}")
+
+                                if n_games <= 1:
+                                    st.info("게임이 1개라서 순서를 바꿀 수 없어.")
+                                else:
+                                    swap_a = st.selectbox(
+                                        "교환할 게임 A",
+                                        list(range(1, n_games + 1)),
+                                        format_func=lambda i: labels[i - 1],
+                                        key=f"reorder_from_{sel_date}",
+                                    )
+                                    swap_b = st.selectbox(
+                                        "교환할 게임 B",
+                                        list(range(1, n_games + 1)),
+                                        format_func=lambda i: labels[i - 1],
+                                        key=f"reorder_to_{sel_date}",
+                                    )
+
+                                    apply_reorder = st.button(
+                                        "✅ 순서 변경 적용",
+                                        use_container_width=True,
+                                        key=f"reorder_apply_{sel_date}",
+                                    )
+                                    st.caption("※ 선택한 두 게임의 순서를 서로 교환합니다. (점수도 해당 게임과 같이 교환)")
+
+                                    if apply_reorder:
+                                        if swap_a == swap_b:
+                                            st.info("같은 게임이라서 교환할 게 없어.")
+                                        else:
+                                            # ✅ 스왑(서로 교환)용 order 생성
+                                            order = list(range(n_games))
+                                            ia = swap_a - 1
+                                            ib = swap_b - 1
+                                            order[ia], order[ib] = order[ib], order[ia]
+
+                                            # schedule 재정렬(스왑)
+                                            new_schedule = [_sched_now[i] for i in order]
+
+                                            # ✅ results도 같은 방식으로 스왑 (문자키/숫자키/list 모두 대응)
+                                            old_results = day_data.get("results", {}) or {}
+
+                                            def _get_result_by_index(idx0: int):
+                                                k1 = str(idx0 + 1)
+                                                k2 = idx0 + 1
+                                                if isinstance(old_results, dict):
+                                                    return old_results.get(k1) or old_results.get(k2) or {}
+                                                if isinstance(old_results, list):
+                                                    return old_results[idx0] if idx0 < len(old_results) else {}
+                                                return {}
+
+                                            old_res_list = [_get_result_by_index(i) for i in range(n_games)]
+                                            new_res_list = [old_res_list[i] for i in order]
+                                            new_results = {str(i + 1): (new_res_list[i] or {}) for i in range(n_games)}
 
                                             day_data["schedule"] = new_schedule
+                                            day_data["results"] = new_results
                                             sessions[sel_date] = day_data
                                             st.session_state.sessions = sessions
                                             save_sessions(sessions)
 
-                                            st.session_state["_flash_day_edit_msg"] = f"✅ {edit_game_no}번 게임 선수 변경 완료!"
+                                            # ✅ 핵심: 점수/사이드 위젯 키 초기화 (그래야 화면 점수가 새 results로 다시 잡힘)
+                                            for i in range(1, n_games + 1):
+                                                for k in (
+                                                    f"{sel_date}_s1_{i}",
+                                                    f"{sel_date}_s2_{i}",
+                                                    f"{sel_date}_side_radio_{i}_t1",
+                                                    f"{sel_date}_side_radio_{i}_t2",
+                                                ):
+                                                    if k in st.session_state:
+                                                        del st.session_state[k]
+
+                                            # ✅ 순서 변경 selectbox도 초기화(선택 꼬임 방지)
+                                            for k in (
+                                                f"reorder_from_{sel_date}",
+                                                f"reorder_to_{sel_date}",
+                                            ):
+                                                if k in st.session_state:
+                                                    del st.session_state[k]
+
+                                            st.session_state["_flash_day_edit_msg"] = "✅ 게임 순서 교환 완료! (점수도 함께 교환됨)"
                                             safe_rerun()
-            
-                    # -----------------------------
-                    # (B) 게임(경기) 순서만 변경
-                    #     - 선수/대진/코트는 그대로
-                    #     - 결과(results)도 함께 이동
-                    # -----------------------------
-                    with col_reorder:
-                        with st.expander("🔀 게임 순서 변경", expanded=False):
-                            n_games = len(_sched_now)
-            
-                            def _team_join(team):
-                                if isinstance(team, (list, tuple)):
-                                    return " / ".join([str(x) for x in team if str(x).strip() != ""])
-                                return str(team) if team is not None else ""
-            
-                            labels = []
-                            for i, (gtype, t1, t2, court) in enumerate(_sched_now, start=1):
-                                labels.append(f"{i}번 ({gtype}, 코트 {court})  {_team_join(t1)} vs {_team_join(t2)}")
-            
-                            if n_games <= 1:
-                                st.info("게임이 1개라서 순서를 바꿀 수 없어.")
-                            else:
-                                move_from = st.selectbox(
-                                    "이동할 게임",
-                                    list(range(1, n_games + 1)),
-                                    format_func=lambda i: labels[i - 1],
-                                    key=f"reorder_from_{sel_date}",
-                                )
-                                move_to = st.selectbox(
-                                    "옮길 위치",
-                                    list(range(1, n_games + 1)),
-                                    format_func=lambda i: labels[i - 1],
-                                    key=f"reorder_to_{sel_date}",
-                                )
-            
-                                apply_reorder = st.button(
-                                    "✅ 순서 변경 적용",
-                                    use_container_width=True,
-                                    key=f"reorder_apply_{sel_date}",
-                                )
-                                st.caption("※ 선수/대진/코트는 그대로 두고, 게임의 표시 순서만 바꿉니다. (점수도 해당 게임과 같이 이동)")
-            
-                                if apply_reorder:
-                                    if move_from == move_to:
-                                        st.info("같은 위치라서 변경할 게 없어.")
-                                    else:
-                                        order = list(range(n_games))
-                                        item = order.pop(move_from - 1)
-                                        order.insert(move_to - 1, item)
-            
-                                        # schedule 재정렬
-                                        new_schedule = [_sched_now[i] for i in order]
-            
-                                        # results도 같은 순서로 이동
-                                        old_results = day_data.get("results", {}) or {}
-                                        old_res_list = []
-                                        for i in range(n_games):
-                                            r = old_results.get(str(i + 1)) or old_results.get(i + 1) or {}
-                                            old_res_list.append(r)
-                                        new_res_list = [old_res_list[i] for i in order]
-                                        new_results = {str(i + 1): new_res_list[i] for i in range(n_games)}
-            
-                                        day_data["schedule"] = new_schedule
-                                        day_data["results"] = new_results
-                                        sessions[sel_date] = day_data
-                                        st.session_state.sessions = sessions
-                                        save_sessions(sessions)
-            
-                                        st.success("게임 순서 변경 완료!")
-                                        if hasattr(st, "rerun"):
-                                            st.rerun()
-                                        elif hasattr(st, "experimental_rerun"):
-                                            st.experimental_rerun()
 
 # 2. 오늘의 요약 리포트 (자동 생성)
             # =====================================================
