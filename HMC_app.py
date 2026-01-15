@@ -37,7 +37,7 @@ SCOREBOARD_PURPOSE = "스코어보드 (Beta)"
 DATA_FILE_PREFIX = "HMC"
 
 # ✅ 앱 모드: "admin"(기본) / "scoreboard"(스코어보드)
-APP_MODE = os.getenv("MSC_APP_MODE", "admin").strip().lower()
+APP_MODE = os.getenv("HMC_APP_MODE", "admin").strip().lower()
 
 # - 스코어보드 전용(브랜딩/완전 읽기전용)
 IS_SCOREBOARD = APP_MODE in ("scb", "scoreboard")
@@ -45,7 +45,7 @@ IS_SCOREBOARD = APP_MODE in ("scb", "scoreboard")
 # ✅ 완전 읽기 전용(어떤 경우에도 players/sessions 저장(쓰기) 금지)
 #   - 스코어보드에서는 기본 True
 #   - 필요하면 환경변수로 강제할 수 있음: MSC_READ_ONLY=1
-READ_ONLY = IS_SCOREBOARD or ((APP_MODE != "admin") and (os.getenv("MSC_READ_ONLY", "0").strip() == "1"))
+READ_ONLY = IS_SCOREBOARD or ((APP_MODE != "admin") and (os.getenv("HMC_READ_ONLY", "0").strip() == "1"))
 
 def APP_PURPOSE_NAME() -> str:
     return SCOREBOARD_PURPOSE if IS_SCOREBOARD else ADMIN_PURPOSE
