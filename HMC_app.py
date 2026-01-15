@@ -34,7 +34,7 @@ ADMIN_PURPOSE = "관리 도우미(Beta)"  # 예: "도우미 (Beta)"
 SCOREBOARD_PURPOSE = "스코어보드 (Beta)"
 
 # ✅ 데이터 파일 prefix (예: "MSC" → MSC_players.json / MSC_sessions.json)
-DATA_FILE_PREFIX = "MSC"
+DATA_FILE_PREFIX = "HMC"
 
 # ✅ 앱 모드: "admin"(기본) / "observer"(옵저버) / "scoreboard"(스코어보드)
 APP_MODE = os.getenv("MSC_APP_MODE", "admin").strip().lower()
@@ -8590,3 +8590,4 @@ with tab5:
 # ✅ 모든 탭 공통 푸터
 # =========================================================
 render_footer()
+
