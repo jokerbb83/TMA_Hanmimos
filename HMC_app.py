@@ -25,7 +25,7 @@ import streamlit.components.v1 as components
 #   - 스코어보드(읽기전용) 타이틀/색/푸터는 APP_MODE로 자동 분기
 # =========================================================
 def CLUB_NAME() -> str:
-    return "HANMIMOS"
+    return "HANMIMIS"
 
 # ✅ 관리자(메인) 앱 타이틀
 ADMIN_PURPOSE = "관리 도우미(Beta)"  # 예: "도우미 (Beta)"
@@ -222,6 +222,25 @@ components.html(
 
     doc.querySelectorAll(SEL_SELECT).forEach(hardenSelect);
     doc.querySelectorAll(SEL_DATE).forEach(softenDate);
+
+    // ✅ 모바일: 점수 입력(라디오+점수+VS+점수+라디오) 한줄 고정
+    try {
+      const markers = doc.querySelectorAll('.score-row');
+      markers.forEach((m) => {
+        const md = m.closest('[data-testid="stMarkdown"]') || m.parentElement;
+        if (!md) return;
+        let hb = md.nextElementSibling;
+        let tries = 0;
+        while (hb && tries < 4 && hb.getAttribute('data-testid') !== 'stHorizontalBlock') {
+          hb = hb.nextElementSibling;
+          tries++;
+        }
+        if (hb && hb.getAttribute('data-testid') === 'stHorizontalBlock') {
+          hb.classList.add('msa-score-row-hb');
+        }
+      });
+    } catch (e) {}
+
   }
 
   patch();
@@ -306,6 +325,29 @@ st.markdown("""
   border-top:1px solid rgba(148,163,184,0.55);
   margin:14px 0;
 }
+
+
+/* ✅ 모바일: 점수 입력 row(라디오+점수+VS+점수+라디오) 한줄 고정 */
+.msa-score-row-hb{
+  flex-wrap: nowrap !important;
+  gap: 8px !important;
+}
+.msa-score-row-hb > div[data-testid="column"]{
+  min-width: 0 !important;
+}
+/* 점수 selectbox 폭 압축 */
+.msa-score-row-hb [data-testid="stSelectbox"],
+.msa-score-row-hb div[data-baseweb="select"]{
+  min-width: 72px !important;
+}
+.msa-score-row-hb [data-baseweb="select"] > div{
+  min-height: 40px !important;
+}
+/* 라디오 영역 너무 넓어지지 않게 */
+.msa-score-row-hb [data-testid="stRadio"]{
+  min-width: 0 !important;
+}
+
 </style>
 """, unsafe_allow_html=True)
 
@@ -942,46 +984,95 @@ def save_sessions(sessions):
     return ok_local
 
 
+def _render_mobile_table_html(html: str, *, font_px: int = 11):
+    """모바일에서 표가 세로로 길어지는 문제(줄바꿈/패딩)를 줄이기 위한 정적 렌더"""
+    try:
+        import hashlib
+        sid = "mt_" + hashlib.md5(html.encode('utf-8')).hexdigest()[:10]
+    except Exception:
+        sid = "mt_static"
+
+    st.markdown(
+        f"""
+<style>
+  /* ✅ 모바일 표 최적화: 세로로 길게 쪼개지는 현상 방지 */
+  #{sid} {{
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }}
+  #{sid} table {{
+    width: max-content;
+    min-width: 100%;
+    border-collapse: collapse;
+    font-size: {font_px}px !important;
+    line-height: 1.15 !important;
+  }}
+  #{sid} th, #{sid} td {{
+    padding: 4px 6px !important;
+    white-space: nowrap !important;
+    word-break: keep-all !important;
+    writing-mode: horizontal-tb !important;
+  }}
+
+  /* ✅ 이름 뱃지(경기 요약/통계 표에서 폭 과다 사용 방지) */
+  #{sid} .name-badge {{
+    padding: 2px 6px !important;
+    margin-right: 3px !important;
+    border-radius: 6px !important;
+    font-size: 0.80rem !important;
+    font-weight: 650 !important;
+  }}
+  /* 인덱스/헤더가 한 글자씩 세로로 꺾이는 경우 방지 */
+  #{sid} th {{
+    max-width: none !important;
+  }}
+</style>
+<div id="{sid}" class="mobile-table-wrap">{html}</div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def render_static_on_mobile(df_or_styler):
     mobile_mode = st.session_state.get("mobile_mode", False)
 
     if mobile_mode:
-        # ✅ 모바일: 드래그/정렬/스크롤 인터랙션 없는 정적 렌더
+        # ✅ 모바일: 드래그/정렬/스크롤 인터랙션 없는 정적 렌더 + 세로 길이 최적화
         try:
             html = df_or_styler.to_html()
-            st.markdown(html, unsafe_allow_html=True)
+            _render_mobile_table_html(html, font_px=11)
         except Exception:
             st.table(df_or_styler)
     else:
         # ✅ PC: 기존대로 인터랙티브
         st.dataframe(df_or_styler, use_container_width=True)
 
+
 def is_mobile():
-        return st.session_state.get("mobile_mode", False)
+    return st.session_state.get("mobile_mode", False)
 
 
 def smart_table(df_or_styler, *, use_container_width=True):
-        """
-        ✅ PC: 기존처럼 인터랙티브 dataframe
-        ✅ 모바일: 열 드래그/정렬 등 인터랙션 없는 '고정 표'
-        """
-        if is_mobile():
-                # 1) Styler면 HTML로 정적 렌더
-                try:
-                        html = df_or_styler.to_html()
-                        st.markdown(html, unsafe_allow_html=True)
-                        return
-                except Exception:
-                        pass
+    """
+    ✅ PC: 기존처럼 인터랙티브 dataframe
+    ✅ 모바일: 열 드래그/정렬 등 인터랙션 없는 '고정 표' (세로 길이 최적화)
+    """
+    if is_mobile():
+        # 1) Styler면 HTML로 정적 렌더
+        try:
+            html = df_or_styler.to_html()
+            _render_mobile_table_html(html, font_px=11)
+            return
+        except Exception:
+            pass
 
-                # 2) 일반 DataFrame이면 정적 table
-                try:
-                        st.table(df_or_styler)
-                except Exception:
-                        # 혹시 모르니 마지막 안전망
-                        st.write(df_or_styler)
-        else:
-                st.dataframe(df_or_styler, use_container_width=use_container_width)
+        # 2) 일반 DataFrame이면 정적 table
+        try:
+            st.table(df_or_styler)
+        except Exception:
+            st.write(df_or_styler)
+    else:
+        st.dataframe(df_or_styler, use_container_width=use_container_width)
 
 
 # ---------------------------------------------------------
@@ -2358,12 +2449,27 @@ def render_score_summary_table(games, roster_by_name):
         return
     games_sorted = sorted(games, key=lambda x: x["게임"])
 
-    html = ["<table style='border-collapse:collapse;width:100%;'>"]
-    header_cols = ["게임", "코트", "타입", "팀1", "팀1 점수", "팀2 점수", "팀2"]
+    # ✅ 모바일에서 오른쪽이 잘리는 느낌을 줄이기 위해
+    #   - 점수 헤더를 짧게(팀1/팀2)
+    #   - 게임/코트/점수 칸 폭을 더 좁게
+    #   - table-layout:fixed 로 화면폭에 맞게 압축
+    html = [
+        "<table class='score-summary' style='border-collapse:collapse;width:100%;table-layout:fixed;'>"
+        "<colgroup>"
+        "<col style='width:34px'>"   # 게임
+        "<col style='width:34px'>"   # 코트
+        "<col style='width:44px'>"   # 타입
+        "<col>"                      # 팀1(선수)
+        "<col style='width:44px'>"   # 팀1 점수
+        "<col style='width:44px'>"   # 팀2 점수
+        "<col>"                      # 팀2(선수)
+        "</colgroup>"
+    ]
+    header_cols = ["게임", "코트", "타입", "팀1", "팀1", "팀2", "팀2"]
     html.append("<thead><tr>")
     for col in header_cols:
         html.append(
-            f"<th style='border:1px solid #ddd;padding:4px;text-align:center;background-color:#f5f5f5;color:#111111;'>{col}</th>"
+            f"<th style='border:1px solid #ddd;padding:3px 4px;text-align:center;background-color:#f5f5f5;color:#111111;'>{col}</th>"
         )
     html.append("</tr></thead><tbody>")
 
@@ -2379,8 +2485,8 @@ def render_score_summary_table(games, roster_by_name):
         t1_html = "".join(render_name_badge(n, roster_by_name) for n in t1)
         t2_html = "".join(render_name_badge(n, roster_by_name) for n in t2)
 
-        s1_style = "border:1px solid #ddd;padding:4px;text-align:center;"
-        s2_style = "border:1px solid #ddd;padding:4px;text-align:center;"
+        s1_style = "border:1px solid #ddd;padding:3px 4px;text-align:center;"
+        s2_style = "border:1px solid #ddd;padding:3px 4px;text-align:center;"
         if s1 is not None and s2 is not None:
             if s1 > s2:
                 s1_style += "background-color:#fff6a5;"
@@ -2392,18 +2498,23 @@ def render_score_summary_table(games, roster_by_name):
 
         html.append(
             "<tr>"
-            f"<td style='border:1px solid #ddd;padding:4px;text-align:center;color:#111111;'>{idx}</td>"
-            f"<td style='border:1px solid #ddd;padding:4px;text-align:center;color:#111111;'>{court}</td>"
-            f"<td style='border:1px solid #ddd;padding:4px;text-align:center;color:#111111;'>{gtype}</td>"
-            f"<td style='border:1px solid #ddd;padding:4px;'>{t1_html}</td>"
+            f"<td style='border:1px solid #ddd;padding:3px 4px;text-align:center;color:#111111;'>{idx}</td>"
+            f"<td style='border:1px solid #ddd;padding:3px 4px;text-align:center;color:#111111;'>{court}</td>"
+            f"<td style='border:1px solid #ddd;padding:3px 4px;text-align:center;color:#111111;'>{gtype}</td>"
+            f"<td style='border:1px solid #ddd;padding:3px 4px;'>{t1_html}</td>"
             f"<td style='{s1_style}'>{'' if s1 is None else s1}</td>"
             f"<td style='{s2_style}'>{'' if s2 is None else s2}</td>"
-            f"<td style='border:1px solid #ddd;padding:4px;'>{t2_html}</td>"
+            f"<td style='border:1px solid #ddd;padding:3px 4px;'>{t2_html}</td>"
             "</tr>"
         )
 
     html.append("</tbody></table>")
-    st.markdown("".join(html), unsafe_allow_html=True)
+    table_html = "".join(html)
+    # ✅ 모바일: 한 줄 유지 + 가로 스크롤로 세로로 길어지는 현상 방지
+    if is_mobile():
+        _render_mobile_table_html(table_html, font_px=11)
+    else:
+        st.markdown(table_html, unsafe_allow_html=True)
 
 def section_card(title: str, emoji: str = "📌"):
     st.markdown(
@@ -3033,42 +3144,49 @@ st.session_state["mobile_mode"] = mobile_mode
 
 MOBILE_SCORE_ROW_CSS = """
 <style>
-/* 모바일에서 점수/이름 줄을 한 줄로 고정 */
+/* 모바일에서 점수 입력 행(라디오+점수)을 한 줄(가로)로 최대한 유지 */
 @media (max-width: 768px) {
 
-    /* 한 게임(점수 줄) 컨테이너 */
-    .score-row {
-        display: flex;
-        flex-wrap: nowrap;
-        align-items: center;
-        gap: 0.25rem;
-        width: 100%;
+    /* ✅ Streamlit columns 래퍼가 자동으로 줄바꿈(wrap)되는 걸 방지 */
+    .score-row [data-testid="stHorizontalBlock"] {
+        flex-wrap: nowrap !important;
+        gap: 0.25rem !important;
+        align-items: center !important;
     }
 
-    /* score-row 안에 있는 각 column(이름, 점수, VS ...) */
+    /* 각 column 패딩 축소 */
     .score-row [data-testid="column"] {
-        flex: 0 0 auto !important;      /* 줄 바꿈 방지 */
-        padding-left: 0.1rem !important;
-        padding-right: 0.1rem !important;
+        padding-left: 0.08rem !important;
+        padding-right: 0.08rem !important;
     }
 
-    /* 드롭다운(점수) 사이즈 조금 줄이기 */
+    /* 드롭다운(점수) 더 컴팩트 */
     .score-row [data-baseweb="select"] {
-        min-width: 3.0rem;
-        font-size: 0.78rem;
-        min-height: 1.9rem;
+        min-width: 2.7rem !important;
+        max-width: 3.2rem !important;
+        font-size: 0.78rem !important;
     }
 
-    /* 이름 배지 너무 크지 않게 */
+    /* 라디오(사이드 선택) 줄간격/패딩 축소 */
+    .score-row div[role="radiogroup"] label {
+        margin: 0 !important;
+        padding: 0.10rem 0 !important;
+        line-height: 1.05 !important;
+    }
+
+    /* 이름 배지/텍스트 살짝 축소 */
     .score-row .name-badge,
     .score-row span {
-        font-size: 0.8rem;
+        font-size: 0.80rem !important;
     }
 }
-
 </style>
 """
 st.markdown(MOBILE_SCORE_ROW_CSS, unsafe_allow_html=True)
+
+
+
+
 
 
 if IS_OBSERVER:
@@ -7036,6 +7154,35 @@ with tab3:
 
                         all_players = list(t1) + list(t2)
 
+                        # ✅ 모바일: 게임별 한 줄 요약(팀+스코어)
+                        if mobile_mode:
+                            try:
+                                _t1_inline = ", ".join([str(x) for x in t1])
+                                _t2_inline = ", ".join([str(x) for x in t2])
+                            except Exception:
+                                _t1_inline = " ".join(map(str, t1))
+                                _t2_inline = " ".join(map(str, t2))
+                            _s1_txt = "" if prev_s1 is None else str(prev_s1)
+                            _s2_txt = "" if prev_s2 is None else str(prev_s2)
+                            st.markdown(
+                                f"""
+                                <div style="
+                                    margin-top:-4px;
+                                    margin-bottom:6px;
+                                    font-size:0.82rem;
+                                    color:#111827;
+                                    white-space:nowrap;
+                                    overflow-x:auto;
+                                    -webkit-overflow-scrolling:touch;
+                                ">
+                                    {_t1_inline} <span style="font-weight:800;">{_s1_txt}</span>
+                                    <span style="color:#6b7280;font-weight:600;"> vs </span>
+                                    <span style="font-weight:800;">{_s2_txt}</span> {_t2_inline}
+                                </div>
+                                """,
+                                unsafe_allow_html=True,
+                            )
+
 
                         # 1) 복식(2:2) → 사이드는 항상 수정 가능, 점수만 잠금
                         # 1) 복식(2:2) → 사이드는 라디오, 점수는 잠금만 적용
@@ -7082,6 +7229,11 @@ with tab3:
 
                             idx_t1 = t1_side_options.index(default_t1)
                             idx_t2 = t2_side_options.index(default_t2)
+
+                            st.markdown(
+                                f"<div class='score-row' id='score-row-{sel_date}-{idx}'>",
+                                unsafe_allow_html=True,
+                            )
 
                             # 🔹 레이아웃: [왼쪽 라디오] [팀1 점수] [VS] [팀2 점수] [오른쪽 라디오]
                             if mobile_mode:
@@ -7156,6 +7308,9 @@ with tab3:
                                     format_func=gender_badge_label,  # 🔵/🔴 표시
                                     disabled=locked,
                                 )
+
+
+                            st.markdown("</div>", unsafe_allow_html=True)
 
                             def sides_from_choice(choice, p1, p2):
                                 if choice == "모름":
@@ -8236,7 +8391,7 @@ with tab4:
 
                         sty_vs = colorize_df_names(df_vs, roster_by_name, ["상대"])
                         sty_vs = sty_vs.format({"승률": "{:.1f}%"})
-                        st.dataframe(sty_vs, use_container_width=True)
+                        smart_table(sty_vs, use_container_width=True)
                     else:
                         st.info("상대 기록이 없습니다.")
                 else:
@@ -8269,7 +8424,7 @@ with tab4:
 
                         sty_pt = colorize_df_names(df_pt, roster_by_name, ["파트너"])
                         sty_pt = sty_pt.format({"승률": "{:.1f}%"})
-                        st.dataframe(sty_pt, use_container_width=True)
+                        smart_table(sty_pt, use_container_width=True)
                     else:
                         st.info("파트너 기록이 없습니다.")
                 else:
@@ -8327,7 +8482,9 @@ with tab4:
                     df_g.index.name = "순위"
 
                     df_g["승률"] = df_g["승률"].map(lambda x: f"{x:.1f}%")
-                    st.dataframe(df_g, use_container_width=True)
+                    # ✅ 모바일: 세로로 길어지는 문제 방지(줄바꿈 금지 + 폰트/패딩 축소 + 가로스크롤)
+                    # ✅ PC: 기존처럼 인터랙티브
+                    smart_table(df_g, use_container_width=True)
 
                 make_group_df("코트 타입별 승률", by_court_type, "코트")
                 make_group_df("코트 사이드(듀스/애드)별 승률", by_side, "사이드")
@@ -8585,7 +8742,7 @@ with tab5:
                             st.info("표시할 데이터가 없습니다.")
                         else:
                             sty_rank = colorize_df_names(rank_df, roster_by_name, ["이름"])
-                            st.dataframe(sty_rank, use_container_width=True)
+                            smart_table(sty_rank, use_container_width=True)
 
                     else:
                         # ✅ 조별보기: 집계는 동일(recs_all), 선수만 A/B로 나누기
@@ -8600,13 +8757,13 @@ with tab5:
                             has_any = True
                             st.markdown("### 🟥 A조 월간 선수 순위표")
                             sty_A = colorize_df_names(rank_df_A, roster_by_name, ["이름"])
-                            st.dataframe(sty_A, use_container_width=True)
+                            smart_table(sty_A, use_container_width=True)
 
                         if rank_df_B is not None:
                             has_any = True
                             st.markdown("### 🟦 B조 월간 선수 순위표")
                             sty_B = colorize_df_names(rank_df_B, roster_by_name, ["이름"])
-                            st.dataframe(sty_B, use_container_width=True)
+                            smart_table(sty_B, use_container_width=True)
 
                         if not has_any:
                             st.info("A조 / B조로 나눠서 표시할 데이터가 없습니다.")
@@ -8926,4 +9083,5 @@ with tab5:
 # ✅ 모든 탭 공통 푸터
 # =========================================================
 render_footer()
+
 
