@@ -158,9 +158,28 @@ def github_upsert_json_file(
 # ---------------------------------------------------------
 st.set_page_config(
     page_title=APP_TITLE,
-    layout="centered",
+    layout=("wide" if IS_OBSERVER else "centered"),
     initial_sidebar_state="collapsed",
 )
+
+st.markdown("""
+<style>
+.msc-scroll-x{
+  width:100%;
+  overflow-x:auto;
+  -webkit-overflow-scrolling:touch;
+}
+.msc-scroll-x { padding-bottom: 6px; }
+.msc-scroll-x table{
+  width:max-content;
+  min-width:100%;
+}
+.msc-scroll-x th, .msc-scroll-x td{
+  white-space:nowrap;
+}
+</style>
+""", unsafe_allow_html=True)
+
 
 def safe_rerun():
     if hasattr(st, "rerun"):
@@ -270,7 +289,75 @@ components.html("""
 
     /* 혹시 footer로 남는 경우까지 같이 */
     footer { display: none !important; visibility: hidden !important; height: 0 !important; }
+
+    /* ✅ Streamlit Cloud 우하단 'Manage app' 버튼/링크 숨김 (텍스트가 없거나 구조가 달라도 잡히게) */
+    a[aria-label*="Manage app" i], button[aria-label*="Manage app" i],
+    a[title*="Manage app" i], button[title*="Manage app" i],
+    a[aria-label*="Manage" i][aria-label*="app" i], button[aria-label*="Manage" i][aria-label*="app" i],
+    a[title*="Manage" i][title*="app" i], button[title*="Manage" i][title*="app" i] {
+      display: none !important;
+      visibility: hidden !important;
+      height: 0 !important;
+      width: 0 !important;
+      margin: 0 !important;
+      padding: 0 !important;
+      overflow: hidden !important;
+    }
   `;
+
+  // ✅ Streamlit Cloud 우하단 'Manage app' 버튼 숨김(소유자 로그인 상태에서만 보이는 UI)
+  function hideManageApp(root){
+    try {
+      const r = root || doc;
+      const nodes = r.querySelectorAll('a,button');
+      nodes.forEach((el) => {
+        const txt = (el.innerText || '').trim();
+        const aria = (el.getAttribute('aria-label') || '').trim();
+        const title = (el.getAttribute('title') || '').trim();
+        const combined = (txt + ' ' + aria + ' ' + title).toLowerCase();
+
+        if (combined.includes('manage app') || (combined.includes('manage') && combined.includes('app'))) {
+          const kill = (node) => {
+            if (!node) return;
+            node.style.display = 'none';
+            node.style.visibility = 'hidden';
+            node.style.height = '0';
+            node.style.width = '0';
+            node.style.margin = '0';
+            node.style.padding = '0';
+            node.style.overflow = 'hidden';
+          };
+          kill(el);
+
+          // 부모 컨테이너까지 같이 숨겨서 빈 영역/오버레이 제거
+          let p = el.parentElement;
+          for (let i = 0; i < 5 && p; i++) {
+            const pt = ((p.innerText || '') + ' ' + (p.getAttribute('aria-label') || '') + ' ' + (p.getAttribute('title') || '')).toLowerCase();
+            if (pt.includes('manage app') || (pt.includes('manage') && pt.includes('app'))) {
+              kill(p);
+            }
+            // fixed 포지션(우하단 플로팅 버튼류)면 같이 숨김
+            try {
+              const cs = window.getComputedStyle(p);
+              if (cs && cs.position === 'fixed') {
+                kill(p);
+              }
+            } catch(e) {}
+            p = p.parentElement;
+          }
+        }
+      });
+
+      // Shadow DOM 내부도 탐색 (일부 Streamlit Cloud UI가 shadowRoot에 있을 수 있음)
+      r.querySelectorAll('*').forEach((el) => {
+        if (el && el.shadowRoot) {
+          hideManageApp(el.shadowRoot);
+        }
+      });
+    } catch (e) {}
+  }
+  hideManageApp(doc);
+  new MutationObserver(() => hideManageApp(doc)).observe(doc.body, { childList: true, subtree: true });
 })();
 </script>
 """, height=0)
@@ -1022,12 +1109,35 @@ def _render_mobile_table_html(html: str, *, font_px: int = 11):
     font-size: 0.80rem !important;
     font-weight: 650 !important;
   }}
+
+  /* ✅ "현재 스코어 요약(표)"는 화면에 '한눈에' 들어오게 더 타이트하게 */
+  #{sid} table.score-summary {{
+    /* zoom은 모바일 크롬에서 안정적. (지원 안 되면 아래 transform fallback) */
+    zoom: 0.92;
+  }}
+  @supports not (zoom: 1) {{
+    #{sid} table.score-summary {{
+      transform: scale(0.92);
+      transform-origin: top left;
+    }}
+  }}
+  #{sid} table.score-summary th, #{sid} table.score-summary td {{
+    padding: 3px 4px !important;
+  }}
+  #{sid} table.score-summary .name-badge {{
+    padding: 1px 5px !important;
+    margin-right: 2px !important;
+    border-radius: 6px !important;
+    font-size: 0.74rem !important;
+    font-weight: 650 !important;
+  }}
   /* 인덱스/헤더가 한 글자씩 세로로 꺾이는 경우 방지 */
   #{sid} th {{
     max-width: none !important;
   }}
 </style>
-<div id="{sid}" class="mobile-table-wrap">{html}</div>
+<div id="{sid}" class="mobile-table-wrap msc-scroll-x">{html}</div>
+
         """,
         unsafe_allow_html=True,
     )
@@ -1037,15 +1147,18 @@ def render_static_on_mobile(df_or_styler):
     mobile_mode = st.session_state.get("mobile_mode", False)
 
     if mobile_mode:
-        # ✅ 모바일: 드래그/정렬/스크롤 인터랙션 없는 정적 렌더 + 세로 길이 최적화
         try:
             html = df_or_styler.to_html()
-            _render_mobile_table_html(html, font_px=11)
+            st.markdown(f'<div class="msc-scroll-x">{html}</div>', unsafe_allow_html=True)
         except Exception:
             st.table(df_or_styler)
     else:
-        # ✅ PC: 기존대로 인터랙티브
-        st.dataframe(df_or_styler, use_container_width=True)
+        # 기존 로직 그대로 (너가 smart_table에서 처리한다면 여기 안 써도 됨)
+        try:
+            st.dataframe(df_or_styler, use_container_width=True)
+        except Exception:
+            st.table(df_or_styler)
+
 
 
 def is_mobile():
@@ -1055,24 +1168,29 @@ def is_mobile():
 def smart_table(df_or_styler, *, use_container_width=True):
     """
     ✅ PC: 기존처럼 인터랙티브 dataframe
-    ✅ 모바일: 열 드래그/정렬 등 인터랙션 없는 '고정 표' (세로 길이 최적화)
+    ✅ 모바일(옵저버 포함): 항상 HTML 정적 렌더 + 가로 스크롤 (절대 st.table로 안 떨어짐)
     """
     if is_mobile():
-        # 1) Styler면 HTML로 정적 렌더
+        # 1) Styler면 HTML
         try:
             html = df_or_styler.to_html()
-            _render_mobile_table_html(html, font_px=11)
+            _render_mobile_table_html(html, font_px=11)   # ✅ 내부에서 스크롤 처리
             return
         except Exception:
             pass
 
-        # 2) 일반 DataFrame이면 정적 table
+        # 2) DataFrame이면 HTML로 변환해서 렌더 (✅ st.table 쓰지 않음)
         try:
-            st.table(df_or_styler)
+            html = df_or_styler.to_html(index=True)
+            _render_mobile_table_html(html, font_px=11)
+            return
         except Exception:
             st.write(df_or_styler)
-    else:
-        st.dataframe(df_or_styler, use_container_width=use_container_width)
+            return
+
+    # PC
+    st.dataframe(df_or_styler, use_container_width=use_container_width)
+
 
 
 # ---------------------------------------------------------
@@ -1784,13 +1902,40 @@ def get_daily_fortune(sel_player):
         "(프로선수) 빙의하는 날.",
         "운세에 의지하지마라.",
         "너의 오늘은 코트 위 별자리다. 연결하면 의미가 된다.",
+        "오늘의 행운은 '발'에 있다. 잔발을 많이 구르면 없던 각도 만들어낸다."
+        "첫 서브가 기막히게 들어가면 의심해라. 오늘 운을 거기 다 썼을 수도 있다. 자만 금지."
+        "백핸드 쪽으로 공이 오면 피하지 마라. 오늘은 역크로스가 터지는 날이다."
+        "오늘 너의 필살기는 '침묵'이다. 입으로 테니스 치지 말고 라켓으로 보여줘라."
+        "네트 맞고 들어가는 행운(네트인)이 2번 있을 예정이다. 미안해하지 말고 주먹 불끈 쥐어라."
+        "오늘 스텝이 좀 꼬인다 싶으면 그냥 달리기로 승부해라. 테니스는 발 빠른 놈이 장땡이다."
+        "스코어가 기억 안 나면 당당하게 너한테 유리하게 불러라. 확신에 찬 목소리는 진실보다 강하다."
+        "세게 후려치고 싶은 순간 딱 힘을 30%만 빼라. 그럼 마법처럼 베이스라인 안쪽에 뚝 떨어진다."
+        "오늘 너의 럭키 존은 '센터'다. 멋 부리려고 앵글 샷 날리다 홈런 치지 말고, 그냥 가운데만 파라. 그게 이기는 길이다."
+        "리턴할 때 다운더라인 쳐다보지도 마라. 오늘 넌 조코비치가 아니다. 얌전히 크로스로 넘겨라."
+        "오늘 발리는 '프라이팬'이다. 라켓을 휘두르지 말고 면만 만들어라. 넌 공을 요리할 수 있다."
+        "준비 자세(스플릿 스텝) 없이 공을 치는 건 무면허 운전이다. 콩콩 뛰는 만큼 승률이 올라간다."
+        "게임이 안 풀리면 라켓 줄(스트링)을 심각하게 만지작거려라. 고수들은 다 그렇게 멘탈 잡는다. 일단 있어 보인다."
+        "파트너가 앞에서 알짱거려도 참아라. 홧김에 맞추면 치료비가 더 나온다. 인내심이 돈 버는 거다."
+        "상대가 못 친 게 아니라 네가 공을 잘 준 거다. 착각은 자유고, 그 착각이 오늘의 자신감을 만든다."
+        "기합 소리는 실력과 무관하다. 하지만 샤라포바처럼 지르면 상대가 쫄아서 실수한다. 소리로 제압해라."
+        "신발 끈 꽉 묶어라. 오늘 네가 공을 쫓아다니는 게 아니라, 공이 널 피해 다닐 운명이다. 미친 듯이 뛰어야 산다."
+        "백핸드 슬라이스 자제해라. 멋있게 깔리는 게 아니라 네트에 처박힐 운명이다. 그냥 쳐라."
+        "어려운 공 멋있게 치려 하지 마라. 관중석엔 아무도 없다. **'개폼'**이라도 넘기는 놈이 승자다."
+        "공을 째려봐라. 네 눈빛에 공이 쫄아서 라인 안으로 들어간다. 끝까지 보는 게 이기는 거다."
+        "오늘은 토스가 전부다. 토스만 일정해도 너는 오늘 코트의 지배자다. 공 띄우는 손에 영혼을 실어라."
+        "상대가 네트 앞에 있으면 무조건 로브다. 키 넘기는 순간 상대의 멘탈도 같이 넘어간다."
+        "발리는 손맛이 아니라 발맛이다. 공이 오면 라켓보다 발이 먼저 마중 나가게 해라."
+        "라인 시비가 붙으면 목소리 깔고 단호하게 말해라. 원래 테니스는 확신범이 이기는 게임이다."
+        "숨이 턱 끝까지 차오르면 신발끈 묶는 척해라. 아무도 모른다. 그 30초가 너를 살린다."
+        "상대가 잘 치면 '운 좋네'라고 중얼거려라. 상대의 실력을 운으로 치부하는 것, 그게 바로 멘탈 방어다."
     ]
 
+
     chosung = list("ㄱㄴㄷㄹㅁㅂㅅㅇㅈㅊㅎ")
-    rackets = ["윌슨", "요넥스", "헤드", "바볼랏", "던롭", "뵐클", "테크니파이버", "프린스"]
+    rackets = ["윌슨", "요넥스", "헤드", "바볼랏", "던롭"]
     ages = ["20대", "30대", "40대", "50대"]
     hands = ["오른손", "왼손"]
-    proplayer = ["페더러","나달","조코비치","야닉시너","알카라즈","손흥민","메시","마이클조던","오타니","이학수","이재용","젠슨황","무하마드 알리","타이거 우즈","도널드 트럼프","일론 머스크","샤라포바"]
+    proplayer = ["페더러","나달","조코비치","야닉시너","알카라즈","손흥민","메시","마이클조던","오타니","이재용","젠슨황","무하마드 알리","타이거 우즈","도널드 트럼프","일론 머스크","샤라포바"]
 
     today = datetime.date.today().strftime("%Y%m%d")
 
@@ -2449,22 +2594,28 @@ def render_score_summary_table(games, roster_by_name):
         return
     games_sorted = sorted(games, key=lambda x: x["게임"])
 
-    # ✅ 모바일에서 오른쪽이 잘리는 느낌을 줄이기 위해
-    #   - 점수 헤더를 짧게(팀1/팀2)
-    #   - 게임/코트/점수 칸 폭을 더 좁게
-    #   - table-layout:fixed 로 화면폭에 맞게 압축
-    html = [
-        "<table class='score-summary' style='border-collapse:collapse;width:100%;table-layout:fixed;'>"
-        "<colgroup>"
-        "<col style='width:34px'>"   # 게임
-        "<col style='width:34px'>"   # 코트
-        "<col style='width:44px'>"   # 타입
-        "<col>"                      # 팀1(선수)
-        "<col style='width:44px'>"   # 팀1 점수
-        "<col style='width:44px'>"   # 팀2 점수
-        "<col>"                      # 팀2(선수)
-        "</colgroup>"
-    ]
+    # ✅ 모바일(옵저버 포함)에서는 표가 '잘리지 않게' 하는 게 최우선.
+    #    table-layout:fixed + width:100% 는 좁은 화면에서 이름 칸이 강제로 압축되어
+    #    오른쪽(팀2)이 잘리는 현상을 만들 수 있음.
+    #    → 모바일에서는 auto 레이아웃으로 두고, wrapper(overflow-x:auto)로 처리.
+    if is_mobile():
+        html = [
+            "<table class='score-summary' style='border-collapse:collapse;'>"
+        ]
+    else:
+        # PC에서는 보기 좋게 고정 폭(압축) 유지
+        html = [
+            "<table class='score-summary' style='border-collapse:collapse;width:100%;table-layout:fixed;'>"
+            "<colgroup>"
+            "<col style='width:34px'>"   # 게임
+            "<col style='width:34px'>"   # 코트
+            "<col style='width:44px'>"   # 타입
+            "<col>"                      # 팀1(선수)
+            "<col style='width:44px'>"   # 팀1 점수
+            "<col style='width:44px'>"   # 팀2 점수
+            "<col>"                      # 팀2(선수)
+            "</colgroup>"
+        ]
     header_cols = ["게임", "코트", "타입", "팀1", "팀1", "팀2", "팀2"]
     html.append("<thead><tr>")
     for col in header_cols:
@@ -2512,9 +2663,12 @@ def render_score_summary_table(games, roster_by_name):
     table_html = "".join(html)
     # ✅ 모바일: 한 줄 유지 + 가로 스크롤로 세로로 길어지는 현상 방지
     if is_mobile():
-        _render_mobile_table_html(table_html, font_px=11)
+        _render_mobile_table_html(table_html, font_px=10)
     else:
         st.markdown(table_html, unsafe_allow_html=True)
+
+
+
 
 def section_card(title: str, emoji: str = "📌"):
     st.markdown(
@@ -3132,14 +3286,18 @@ roster_by_name = {p["name"]: p for p in roster}
 
 st.title(f"🎾 {APP_TITLE}")
 
-# 📱 폰에서 볼 때 ON 해두면 A/B조 나란히 레이아웃을 세로로 바꿔줌
-mobile_mode = st.checkbox(
-    "📱 모바일 최적화 모드",
-    value=True,
-    help="핸드폰으로 볼 때 켜 두는 걸 추천!"
-)
-
-st.session_state["mobile_mode"] = mobile_mode
+# 📱 옵저버/스코어보드: 무조건 모바일 최적화 ON (체크박스도 숨김)
+if IS_OBSERVER:
+    mobile_mode = True
+    st.session_state["mobile_mode"] = True
+else:
+    # 일반(관리자) 모드에서만 토글 제공
+    mobile_mode = st.checkbox(
+        "📱 모바일 최적화 모드",
+        value=True,
+        help="핸드폰으로 볼 때 켜 두는 걸 추천!"
+    )
+    st.session_state["mobile_mode"] = mobile_mode
 
 
 MOBILE_SCORE_ROW_CSS = """
@@ -6149,45 +6307,38 @@ with tab3:
                 save_sessions(sessions)
                 st.caption("🏟️ 코트 종류가 저장되었습니다.")
 
-
-# ---------------------------------------------------------
-# 표시 방식 (옵저버: 숨김 + 전체 고정)
-# ---------------------------------------------------------
-
-# 날짜 전체일 때는 라디오 숨기고 자동 전체로
+        # 날짜 전체일 때는 라디오 숨기고 자동 전체로
         if sel_date == "전체":
             view_mode_scores = "전체"
-        
         else:
-            # ✅ 옵저버: 표시 방식 자체를 숨김 + 전체 고정
+            # ✅ 스코어보드(옵저버)에서는 표시 방식 자체를 숨김 + 전체로 고정
             if IS_OBSERVER:
                 view_mode_scores = "전체"
-        
             else:
-                # ✅ 관리자만: lock_view=True면 전체로 고정(라디오 숨김)
+                # lock_view=True면 전체로 고정하고 라디오를 안 보여줌
                 if lock_view:
                     view_mode_scores = "전체"
                 else:
                     # ✅ 저장된 값이 없으면 기본은 "전체"
                     saved_view = day_data.get("score_view_mode", "전체")
-        
-                    # ["조별 보기 (A/B조)", "전체"] 에서 "전체"면 index=1
-                    default_view_index = 1 if saved_view == "전체" else 0
-        
+
+                    default_view_index = 1 if saved_view == "전체" else 0  # ["조별", "전체"]에서 전체=1
+
                     view_mode_scores = st.radio(
                         "표시 방식",
                         ["조별 보기 (A/B조)", "전체"],
                         horizontal=True,
-                        key=f"tab3_view_mode_scores_{sel_date}",  # ✅ 날짜별 key로 분리
+                        key=f"tab3_view_mode_scores_{sel_date}",   # ✅ 날짜별 key로 분리
                         index=default_view_index,
                     )
-        
+
                     # ✅ 선택값 저장(다음에 다시 들어와도 유지) - 관리자만
                     if view_mode_scores != saved_view:
                         day_data["score_view_mode"] = view_mode_scores
                         sessions[sel_date] = day_data
                         st.session_state.sessions = sessions
                         save_sessions(sessions)
+
 
 
 
@@ -9126,6 +9277,5 @@ with tab5:
 # ✅ 모든 탭 공통 푸터
 # =========================================================
 render_footer()
-
 
 
