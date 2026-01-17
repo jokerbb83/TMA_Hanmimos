@@ -25,7 +25,7 @@ import streamlit.components.v1 as components
 #   - 스코어보드(읽기전용) 타이틀/색/푸터는 APP_MODE로 자동 분기
 # =========================================================
 def CLUB_NAME() -> str:
-    return "HANMIMIS"
+    return "HANMIMOS"
 
 # ✅ 관리자(메인) 앱 타이틀
 ADMIN_PURPOSE = "관리 도우미(Beta)"  # 예: "도우미 (Beta)"
@@ -8500,17 +8500,42 @@ with tab4:
 with tab5:
     section_card("월별 통계", "📆")
 
+
+
+
     if not sessions:
         st.info("저장된 기록이 없습니다.")
     else:
         # ---------------------------------------------------------
         # 0) 월 선택
         # ---------------------------------------------------------
-        months = sorted({d[:7] for d in sessions.keys() if d != "전체"})
+
+        months = sorted(
+            {
+                d[:7].strip()
+                for d in sessions.keys()
+                if d != "전체" and isinstance(d, str) and len(d) >= 7 and d[4] == "-"
+            },
+            reverse=True,  # ✅ 최신 -> 과거
+        )
+        
         if not months:
             st.info("월별로 표시할 기록이 없습니다.")
         else:
-            sel_month = st.selectbox("월 선택 (YYYY-MM)", months, index=len(months) - 1)
+            # ✅ 항상 최신월을 기본 선택으로 (기존 선택값이 없거나 목록에 없으면 최신으로)
+            if "sel_month" not in st.session_state or st.session_state["sel_month"] not in months:
+                st.session_state["sel_month"] = months[0]
+        
+            sel_month = st.selectbox(
+                "월 선택 (YYYY-MM)",
+                months,
+                key="sel_month",
+            )
+        
+        
+
+
+
 
             # ---------------------------------------------------------
             # 1) 이 달의 게임 모으기 (스페셜 매치 제외)
@@ -8525,11 +8550,10 @@ with tab5:
                 st.info("이 달에 경기 기록이 없습니다.")
             else:
                 # =========================================================
-                # ---------------------------------------------------------
                 # ✅ 집계는 '항상 전체 기준'으로 1번만 만든다 (옵저버 포함)
                 #    - 출석일수/경기수: 점수 없어도(결과 None) 참여하면 카운트
                 #    - 승/무/패/점수/득실: 점수가 있을 때만 반영
-                # ---------------------------------------------------------
+                # =========================================================
                 def make_recs():
                     return defaultdict(
                         lambda: {
@@ -8631,7 +8655,15 @@ with tab5:
                                         continue
                                     partners_by_player[p].add(guest_bucket(q, roster))
 
+                # =========================================================
+                # ✅ '순위표 보기 방식'을 Tab5 전체에서 공유
+                #    - 옵저버: 기본 "전체"
+                #    - 관리자: 라디오 선택값
+                # =========================================================
+                rank_view_mode = st.session_state.get("month_rank_view_mode", "전체")
+
                 if not IS_OBSERVER:
+                    # =========================================================
                     # 1. 월간 선수 순위표
                     # =========================================================
                     st.subheader("1. 월간 선수 순위표")
@@ -8655,11 +8687,6 @@ with tab5:
                             return "A"
                         if g in ("B", "B조", "B조 ", "B group"):
                             return "B"
-                        if g == "A조":
-                            return "A"
-                        if g == "B조":
-                            return "B"
-                        # roster에 "A조"/"B조"로 들어있는 경우
                         if "A" in str(g) and "조" in str(g):
                             return "A"
                         if "B" in str(g) and "조" in str(g):
@@ -8768,8 +8795,11 @@ with tab5:
                         if not has_any:
                             st.info("A조 / B조로 나눠서 표시할 데이터가 없습니다.")
 
-                    # =========================================================
+                # =========================================================
                 # 2. 월 전체 경기 요약 (일별)
+                #    ✅ 순위표 보기 방식(rank_view_mode)과 연동
+                #       - 전체: 무조건 한 표로
+                #       - 조별: A/B/기타로 분리
                 # =========================================================
                 st.subheader(("1. " if IS_OBSERVER else "2. ") + "월 전체 경기 요약 (일별)")
 
@@ -8811,7 +8841,7 @@ with tab5:
                         else:
                             rows_other.append(row)
 
-                    if rows_A and rows_B:
+                    if rank_view_mode == "조별 보기 (A/B조)":
                         if rows_A:
                             st.markdown("#### 🟥 A조 경기 요약")
                             render_score_summary_table(rows_A, roster_by_name)
@@ -8827,7 +8857,7 @@ with tab5:
                 # =========================================================
                 # 3. 이 달의 BEST
                 # =========================================================
-                st.subheader("3. 이 달의 BEST (주손/라켓/연령대/성별)")
+                st.subheader(("2. " if IS_OBSERVER else "3. ") + "이 달의 BEST (주손/라켓/연령대/성별)")
 
                 # 👉 BEST 계산은 전체 집계 기준 유지
                 recs = recs_all
@@ -8943,7 +8973,11 @@ with tab5:
                     partner_line = "데이터 부족 (복식 경기 없음)"
 
                 # 👑 출석왕 — recs(순위표)와 동일 기준(출석 날짜 set)
-                attendance_count = {p: len(r["days"]) for p, r in recs.items() if r["G"] > 0 and not is_guest_name(p, roster)}
+                attendance_count = {
+                    p: len(r["days"])
+                    for p, r in recs.items()
+                    if r["G"] > 0 and not is_guest_name(p, roster)
+                }
                 if attendance_count:
                     max_days = max(attendance_count.values())
                     att_winners = [p for p, v in attendance_count.items() if v == max_days]
