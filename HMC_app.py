@@ -6149,37 +6149,46 @@ with tab3:
                 save_sessions(sessions)
                 st.caption("🏟️ 코트 종류가 저장되었습니다.")
 
-        # 날짜 전체일 때는 라디오 숨기고 자동 전체로
+
+# ---------------------------------------------------------
+# 표시 방식 (옵저버: 숨김 + 전체 고정)
+# ---------------------------------------------------------
+
+# 날짜 전체일 때는 라디오 숨기고 자동 전체로
         if sel_date == "전체":
             view_mode_scores = "전체"
+        
         else:
-            # ✅ 스코어보드(옵저버)에서는 표시 방식 자체를 숨김 + 전체로 고정
+            # ✅ 옵저버: 표시 방식 자체를 숨김 + 전체 고정
             if IS_OBSERVER:
                 view_mode_scores = "전체"
+        
             else:
-                # lock_view=True면 전체로 고정하고 라디오를 안 보여줌
+                # ✅ 관리자만: lock_view=True면 전체로 고정(라디오 숨김)
                 if lock_view:
                     view_mode_scores = "전체"
                 else:
                     # ✅ 저장된 값이 없으면 기본은 "전체"
                     saved_view = day_data.get("score_view_mode", "전체")
-
-                    default_view_index = 1 if saved_view == "전체" else 0  # ["조별", "전체"]에서 전체=1
-
+        
+                    # ["조별 보기 (A/B조)", "전체"] 에서 "전체"면 index=1
+                    default_view_index = 1 if saved_view == "전체" else 0
+        
                     view_mode_scores = st.radio(
                         "표시 방식",
                         ["조별 보기 (A/B조)", "전체"],
                         horizontal=True,
-                        key=f"tab3_view_mode_scores_{sel_date}",   # ✅ 날짜별 key로 분리
+                        key=f"tab3_view_mode_scores_{sel_date}",  # ✅ 날짜별 key로 분리
                         index=default_view_index,
                     )
-
+        
                     # ✅ 선택값 저장(다음에 다시 들어와도 유지) - 관리자만
                     if view_mode_scores != saved_view:
                         day_data["score_view_mode"] = view_mode_scores
                         sessions[sel_date] = day_data
                         st.session_state.sessions = sessions
                         save_sessions(sessions)
+
 
 
         # 나중에 다시 그리기 위한 요약 컨테이너
