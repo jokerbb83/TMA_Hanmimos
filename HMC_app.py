@@ -629,7 +629,7 @@ def build_daily_report(sel_date, day_data):
     """
     선택된 날짜(sel_date)에 대한 '오늘의 요약 리포트'용 문장 리스트 생성.
     - 출석 인원 / 점수 입력된 경기 수
-    - 승점왕 / 공동 승점왕
+    - MVP / 공동 MVP
     - 무패 선수
     - 상대를 0점으로 이긴 셧아웃 최다 선수
     """
@@ -736,13 +736,13 @@ def build_daily_report(sel_date, day_data):
             who = best_players[0]
             r = recs[who]
             lines.append(
-                f"오늘의 승점왕: {who} (승점 {best_points}점, {r['W']}승 {r['D']}무 {r['L']}패)"
+                f"오늘의 MVP: {who} (승점 {best_points}점, {r['W']}승 {r['D']}무 {r['L']}패)"
             )
         else:
             names_str = ", ".join(best_players)
             example = recs[best_players[0]]
             lines.append(
-                f"오늘의 공동 승점왕: {names_str} (모두 승점 {best_points}점, 예: {example['W']}승 {example['D']}무 {example['L']}패)"
+                f"오늘의 공동 MVP: {names_str} (모두 승점 {best_points}점, 예: {example['W']}승 {example['D']}무 {example['L']}패)"
             )
 
     # 3) 무패 선수
@@ -9126,5 +9126,6 @@ with tab5:
 # ✅ 모든 탭 공통 푸터
 # =========================================================
 render_footer()
+
 
 
