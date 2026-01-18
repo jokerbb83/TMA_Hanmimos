@@ -8,6 +8,7 @@ import math
 import os
 import random
 import re
+import html as _html
 from collections import Counter, defaultdict
 from datetime import date
 from itertools import combinations
@@ -162,8 +163,127 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
+
+
+# ---------------------------------------------------------
+# ✅ 모바일/PC 자동 감지 (체크박스 없이 자동 적용)
+#   - JS가 브라우저 폭/UA로 모바일 여부를 판단해 URL 쿼리(mm=1/0)를 맞춘 뒤 1회 reload
+#   - Python은 쿼리값을 읽어 st.session_state['mobile_mode']에 반영
+# ---------------------------------------------------------
+
+def _get_query_param(key: str):
+    """Streamlit 버전 차이를 흡수해서 쿼리 파라미터 값을 하나로 가져온다."""
+    try:
+        qp = st.query_params  # 신버전
+        v = qp.get(key)
+        if isinstance(v, (list, tuple)):
+            return v[0] if v else None
+        return v
+    except Exception:
+        try:
+            qp = st.experimental_get_query_params()
+            v = qp.get(key, [None])
+            return v[0] if isinstance(v, list) else v
+        except Exception:
+            return None
+
+# JS: 모바일 여부를 mm=1/0로 고정시켜서 서버(Python)도 동일하게 인지하도록 함
+components.html(
+    """
+<script>
+(function(){
+  const win = window.parent || window;
+  function isMobile(){
+    try{
+      return win.matchMedia('(max-width: 900px)').matches || /Android|iPhone|iPad|iPod/i.test(win.navigator.userAgent);
+    }catch(e){
+      return /Android|iPhone|iPad|iPod/i.test(((win.navigator&&win.navigator.userAgent)||''));
+    }
+  }
+  const desired = isMobile() ? '1' : '0';
+  try{
+    const url = new URL(win.location.href);
+    const cur = url.searchParams.get('mm');
+
+    // ✅ 무한 리로드 방지: 같은 값으로는 1회만 교정
+    const k = 'msc_mm_fix_once';
+    const last = win.sessionStorage ? win.sessionStorage.getItem(k) : null;
+    const stamp = String(cur) + '->' + desired;
+
+    if (cur !== desired && last !== stamp) {
+      if (win.sessionStorage) win.sessionStorage.setItem(k, stamp);
+      url.searchParams.set('mm', desired);
+      win.history.replaceState({}, '', url.toString());
+      win.location.reload();
+      return;
+    }
+
+    // cur==desired이면 다음 교정을 위해 초기화
+    if (cur === desired && win.sessionStorage) {
+      win.sessionStorage.removeItem(k);
+    }
+  }catch(e){}
+})();
+</script>
+    """,
+    height=0,
+)
+
+# Python: 쿼리(mm)가 있으면 그 값을 우선 반영
+_mm = str(_get_query_param('mm') or '').strip().lower()
+if _mm in ('1', 'true', 't', 'yes', 'y'):
+    st.session_state['mobile_mode'] = True
+elif _mm in ('0', 'false', 'f', 'no', 'n'):
+    st.session_state['mobile_mode'] = False
+else:
+    # 쿼리가 아직 없으면(첫 로드) 기본은 PC(OFF). JS가 곧 mm를 맞추고 reload됨.
+    st.session_state['mobile_mode'] = bool(st.session_state.get('mobile_mode', False))
+
+# ---------------------------------------------------------
+# ✅ 옵저버/스코어보드: 화면 가로폭 제한(무한히 넓어지는 것 방지)
+#   - wide 레이아웃에서도 본문을 관리자처럼 일정 폭으로 고정
+# ---------------------------------------------------------
+if IS_OBSERVER:
+    st.markdown("""
+    <style>
+    /* ✅ wide에서도 본문 폭 고정 */
+    [data-testid="stMainBlockContainer"],
+    [data-testid="stMainBlockContainer"] .block-container,
+    [data-testid="stAppViewContainer"] .main .block-container,
+    [data-testid="stAppViewContainer"] section.main .block-container,
+    section.main .block-container,
+    .main .block-container,
+    .block-container{
+      max-width: 720px !important;
+      width: 100% !important;
+      padding-left: 1.2rem !important;
+      padding-right: 1.2rem !important;
+      margin-left: auto !important;
+      margin-right: auto !important;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
 st.markdown("""
 <style>
+/* ✅ 상단 타이틀(로고/앱명) 위 여백 축소 */
+[data-testid="stAppViewContainer"] .block-container{
+  padding-top: 0.9rem !important;
+}
+[data-testid="stAppViewContainer"] h1{
+  margin-top: 0.15rem !important;
+  margin-bottom: 0.9rem !important;
+}
+@media (max-width: 900px){
+  [data-testid="stAppViewContainer"] .block-container{
+    padding-top: 0.55rem !important;
+  }
+  [data-testid="stAppViewContainer"] h1{
+    margin-top: 0.05rem !important;
+    margin-bottom: 0.7rem !important;
+  }
+}
+
 .msc-scroll-x{
   width:100%;
   overflow-x:auto;
@@ -177,6 +297,15 @@ st.markdown("""
 .msc-scroll-x th, .msc-scroll-x td{
   white-space:nowrap;
 }
+
+.msc-gamehead{display:flex; align-items:center; justify-content:flex-start; gap:10px; flex-wrap:wrap;}
+.msc-chip-wrap{display:flex; align-items:center; justify-content:flex-start; gap:6px; flex-wrap:wrap;}
+.msc-vs{display:inline-block; margin:0 6px; font-weight:900; font-size:0.78rem; color:#6b7280;}
+.msc-chip{display:inline-block; padding:4px 10px; border-radius:999px; font-size:0.78rem; font-weight:800; line-height:1;}
+.msc-chip-m{background:#dbeafe; color:#1e40af;}
+.msc-chip-f{background:#ffe4e6; color:#be123c;}
+.msc-chip-u{background:#e5e7eb; color:#374151;}
+
 </style>
 """, unsafe_allow_html=True)
 
@@ -1935,7 +2064,7 @@ def get_daily_fortune(sel_player):
     rackets = ["윌슨", "요넥스", "헤드", "바볼랏", "던롭"]
     ages = ["20대", "30대", "40대", "50대"]
     hands = ["오른손", "왼손"]
-    proplayer = ["페더러","나달","조코비치","야닉시너","알카라즈","손흥민","메시","마이클조던","오타니","이재용","젠슨황","무하마드 알리","타이거 우즈","도널드 트럼프","일론 머스크","샤라포바"]
+    proplayer = ["페더러","나달","조코비치","정현","신산희","권순우","야닉시너","알카라즈","손흥민","메시","마이클조던","오타니","이재용","젠슨황","무하마드 알리","타이거 우즈","도널드 트럼프","일론 머스크","샤라포바"]
 
     today = datetime.date.today().strftime("%Y%m%d")
 
@@ -3286,18 +3415,8 @@ roster_by_name = {p["name"]: p for p in roster}
 
 st.title(f"🎾 {APP_TITLE}")
 
-# 📱 옵저버/스코어보드: 무조건 모바일 최적화 ON (체크박스도 숨김)
-if IS_OBSERVER:
-    mobile_mode = True
-    st.session_state["mobile_mode"] = True
-else:
-    # 일반(관리자) 모드에서만 토글 제공
-    mobile_mode = st.checkbox(
-        "📱 모바일 최적화 모드",
-        value=True,
-        help="핸드폰으로 볼 때 켜 두는 걸 추천!"
-    )
-    st.session_state["mobile_mode"] = mobile_mode
+# 📱 모바일 최적화: 체크박스 UI 제거 (자동 감지는 상단에서 처리)
+mobile_mode = st.session_state.get('mobile_mode', False)
 
 
 MOBILE_SCORE_ROW_CSS = """
@@ -4166,8 +4285,11 @@ def render_tab_today_session(tab):
         def _make_on_change_validator(r: int, key: str, court_count: int, gtype: str):
             def _cb():
                 cur = st.session_state.get(key, "선택")
+
+                # ✅ 사용자가 직접 만지면(선택/해제) 해당 슬롯은 '수동 잠금'으로 간주 → auto 플래그 해제
                 if not cur or cur == "선택":
                     st.session_state[f"_prev_{key}"] = "선택"
+                    st.session_state[f"_auto_{key}"] = False
                     return
 
                 # 같은 라운드 내 중복 선택 방지
@@ -4179,6 +4301,7 @@ def render_tab_today_session(tab):
                         return
 
                 st.session_state[f"_prev_{key}"] = cur
+                st.session_state[f"_auto_{key}"] = False
 
             return _cb
 
@@ -4208,6 +4331,41 @@ def render_tab_today_session(tab):
         def _gender_of(name: str) -> str:
             return roster_by_name.get(name, {}).get("gender", "남")
 
+        def _gender_chip_class(name: str) -> str:
+            g = str(_gender_of(name) or '').strip()
+            if g in ('여', '여자', 'F', 'Female', 'female', 'W'): 
+                return 'msc-chip-f'
+            if g in ('남', '남자', 'M', 'Male', 'male'): 
+                return 'msc-chip-m'
+            return 'msc-chip-u'
+
+        def _chips_html(names) -> str:
+            parts = []
+            for nm in (names or []):
+                if not nm or nm == '선택':
+                    continue
+                cls = _gender_chip_class(nm)
+                parts.append(f"<span class='msc-chip {cls}'>{_html.escape(str(nm))}</span>")
+            return ''.join(parts)
+
+        def _match_chips_html(vals, gtype: str) -> str:
+            """현재 선택된 선수들을 팀별 칩으로 렌더 + 팀 사이에 vs 추가"""
+            if not vals:
+                return ""
+            if gtype == "단식":
+                t1 = [vals[0]] if len(vals) >= 1 else []
+                t2 = [vals[1]] if len(vals) >= 2 else []
+            else:
+                t1 = list(vals[:2])
+                t2 = list(vals[2:4])
+
+            left = _chips_html(t1)
+            right = _chips_html(t2)
+            if not (left or right):
+                return ""
+            return f"{left}<span class='msc-vs'>vs</span>{right}"
+
+
         def _ntrp_of(name: str):
             v = roster_by_name.get(name, {}).get("ntrp", None)
             try:
@@ -4215,21 +4373,23 @@ def render_tab_today_session(tab):
             except Exception:
                 return None
 
-        def _pick_by_ntrp_closest(cands, target_ntrp):
+        def _pick_by_ntrp_closest(cands, target_ntrp, rng=None):
+            """target_ntrp에 가장 가까운 후보를 선택. rng를 주면 그 RNG를 사용."""
             if not cands:
                 return None
+            rng = rng or random
             if target_ntrp is None:
-                return random.choice(cands)
+                return rng.choice(cands)
 
             scored = []
             for p in cands:
                 pn = _ntrp_of(p)
                 if pn is None:
-                    scored.append((9999.0, random.random(), p))
+                    scored.append((9999.0, rng.random(), p))
                 else:
-                    scored.append((abs(pn - target_ntrp), random.random(), p))
+                    scored.append((abs(pn - target_ntrp), rng.random(), p))
             scored.sort(key=lambda x: (x[0], x[1]))
-            return scored[0][2] if scored else random.choice(cands)
+            return scored[0][2] if scored else rng.choice(cands)
 
         def _build_filtered_options_for_key(r: int, k: str, pool, court_count: int, gtype: str):
             current = _get_manual_value(k)
@@ -4315,74 +4475,147 @@ def render_tab_today_session(tab):
             view_mode: str,
             gender_mode: str,  # "랜덤" / "동성" / "혼합"
             ntrp_on: bool,
+            target_courts=None,  # ex) [1,3] 처럼 특정 코트만 채우고 싶을 때
+            seed_base: int | None = None,
         ):
-            plan = {}
+            """수동 입력의 빈칸을 자동 채움.
 
+            ✅ 이번 버전 핵심:
+            - 사용자가 직접 고른 값(=auto 플래그 False)은 '고정'으로 유지
+            - 자동으로 채워졌던 값(=auto 플래그 True)은 다음 '빈칸 채우기' 때 다시 랜덤으로 갈아끼움
+            - target_courts가 있으면 그 코트만 변경하되, 같은 라운드 내 중복 방지는 유지(다른 코트의 값은 used로 처리)
+            """
+            plan = {}
+            auto_keys = set()
+
+            # ✅ 이번 클릭마다 결과가 달라지게: seed_base를 넣으면 round별로 로컬 RNG 사용
+            if seed_base is None:
+                seed_base = int(random.random() * 1_000_000_000)
+            rng = random.Random(int(seed_base) + int(r) * 7919)
+
+            def _is_auto(k: str) -> bool:
+                return bool(st.session_state.get(f"_auto_{k}", False))
+
+            # ✅ 특정 코트만 채우기(체크된 게임만 등)
+            _target = None
+            if target_courts is not None:
+                try:
+                    _target = set(int(x) for x in target_courts)
+                except Exception:
+                    _target = None
+
+            # 현재 라운드 모든 값
             keys_round = _manual_all_keys_for_round(r, court_count, gtype)
-            fixed = {k: _get_manual_value(k) for k in keys_round}
-            used = {v for v in fixed.values() if v and v != "선택"}
+            cur_map = {k: _get_manual_value(k) for k in keys_round}
+
+            # used에는 '변경되지 않을 값'만 먼저 넣는다.
+            used = set()
 
             for c in range(1, int(court_count) + 1):
+                is_target_court = (_target is None) or (int(c) in _target)
+
                 grp_tag = _court_group_tag(view_mode, c)
                 pool = _pool_by_group(players_selected, grp_tag)
 
                 if gtype == "단식":
                     k1 = _manual_key(r, c, 1, gtype)
                     k2 = _manual_key(r, c, 2, gtype)
-                    v1 = fixed.get(k1, "선택")
-                    v2 = fixed.get(k2, "선택")
+                    v1 = cur_map.get(k1, "선택")
+                    v2 = cur_map.get(k2, "선택")
 
-                    if v1 != "선택" and v2 != "선택":
+                    if not is_target_court:
+                        # 대상 코트가 아니면 현재값 유지(수동/자동 상관없이)
+                        if v1 != "선택":
+                            used.add(v1); plan.setdefault(k1, v1)
+                        if v2 != "선택":
+                            used.add(v2); plan.setdefault(k2, v2)
+                        continue
+
+                    # ✅ 대상 코트면: 수동으로 고정된 값만 유지, 자동 채움 값은 "선택"으로 간주(교체)
+                    keep1 = (v1 != "선택" and (not _is_auto(k1)))
+                    keep2 = (v2 != "선택" and (not _is_auto(k2)))
+                    v1_eff = v1 if keep1 else "선택"
+                    v2_eff = v2 if keep2 else "선택"
+
+                    if keep1:
+                        used.add(v1); plan.setdefault(k1, v1)
+                    if keep2:
+                        used.add(v2); plan.setdefault(k2, v2)
+
+                    # 둘 다 수동 고정이면 끝
+                    if v1_eff != "선택" and v2_eff != "선택":
                         continue
 
                     avail = [p for p in pool if p not in used]
 
-                    if v1 != "선택" and v2 == "선택":
+                    if v1_eff != "선택" and v2_eff == "선택":
                         cand = avail
                         if gender_mode == "동성":
-                            g1 = _gender_of(v1)
+                            g1 = _gender_of(v1_eff)
                             cand = [p for p in cand if _gender_of(p) == g1]
-                        pick = _pick_by_ntrp_closest(cand, _ntrp_of(v1)) if ntrp_on else (random.choice(cand) if cand else None)
+                        pick = _pick_by_ntrp_closest(cand, _ntrp_of(v1_eff), rng=rng) if ntrp_on else (rng.choice(cand) if cand else None)
                         if pick:
                             plan[k2] = pick
                             used.add(pick)
+                            auto_keys.add(k2)
                         continue
 
-                    if v1 == "선택" and v2 != "선택":
+                    if v1_eff == "선택" and v2_eff != "선택":
                         cand = avail
                         if gender_mode == "동성":
-                            g2 = _gender_of(v2)
+                            g2 = _gender_of(v2_eff)
                             cand = [p for p in cand if _gender_of(p) == g2]
-                        pick = _pick_by_ntrp_closest(cand, _ntrp_of(v2)) if ntrp_on else (random.choice(cand) if cand else None)
+                        pick = _pick_by_ntrp_closest(cand, _ntrp_of(v2_eff), rng=rng) if ntrp_on else (rng.choice(cand) if cand else None)
                         if pick:
                             plan[k1] = pick
                             used.add(pick)
+                            auto_keys.add(k1)
                         continue
 
-                    if v1 == "선택" and v2 == "선택":
+                    if v1_eff == "선택" and v2_eff == "선택":
                         cand = avail
                         if len(cand) >= 2:
                             if ntrp_on:
-                                a = random.choice(cand)
+                                a = rng.choice(cand)
                                 cand2 = [x for x in cand if x != a]
-                                b = _pick_by_ntrp_closest(cand2, _ntrp_of(a))
+                                b = _pick_by_ntrp_closest(cand2, _ntrp_of(a), rng=rng)
                                 if b:
                                     plan[k1], plan[k2] = a, b
                                     used.update([a, b])
+                                    auto_keys.update([k1, k2])
                             else:
-                                a, b = random.sample(cand, 2)
+                                a, b = rng.sample(cand, 2)
                                 plan[k1], plan[k2] = a, b
                                 used.update([a, b])
+                                auto_keys.update([k1, k2])
                     continue
 
                 # ---------------- 복식 ----------------
                 ks = [_manual_key(r, c, i, gtype) for i in (1, 2, 3, 4)]
-                vs = [fixed.get(k, "선택") for k in ks]
-                empty_keys = [k for k, v in zip(ks, vs) if v == "선택"]
+                vs = [cur_map.get(k, "선택") for k in ks]
+
+                if not is_target_court:
+                    # 대상 코트가 아니면 현재값 유지
+                    for k, v in zip(ks, vs):
+                        if v != "선택":
+                            used.add(v)
+                            plan.setdefault(k, v)
+                    continue
+
+                # ✅ 대상 코트면: 수동 고정만 유지, 자동 채움은 빈칸으로 간주(교체)
+                keep_mask = [(v != "선택" and (not _is_auto(k))) for k, v in zip(ks, vs)]
+                eff_vs = [v if keep else "선택" for v, keep in zip(vs, keep_mask)]
+
+                for k, v, keep in zip(ks, vs, keep_mask):
+                    if keep and v != "선택":
+                        used.add(v)
+                        plan.setdefault(k, v)
+
+                empty_keys = [k for k, v in zip(ks, eff_vs) if v == "선택"]
                 if not empty_keys:
                     continue
 
-                already = [v for v in vs if v != "선택"]
+                already = [v for v in eff_vs if v != "선택"]
                 avail = [p for p in pool if p not in used]
                 men = [p for p in avail if _gender_of(p) == "남"]
                 women = [p for p in avail if _gender_of(p) == "여"]
@@ -4391,56 +4624,118 @@ def render_tab_today_session(tab):
                 picks = []
 
                 if gender_mode == "혼합":
-                    already_m = sum(1 for x in already if _gender_of(x) == "남")
-                    already_w = sum(1 for x in already if _gender_of(x) == "여")
+                    # ✅ 혼합복식(남+여 vs 남+여) 강제:
+                    #    팀1(슬롯1,2)과 팀2(슬롯3,4) 각각이 (남1+여1)이 되도록 채운다.
+                    key_to_idx = {k: i for i, k in enumerate(ks)}
 
-                    while len(picks) < need:
-                        want_m = (already_m + sum(1 for x in picks if _gender_of(x) == "남")) < 2
-                        want_w = (already_w + sum(1 for x in picks if _gender_of(x) == "여")) < 2
-
-                        if want_m and men:
-                            pick = random.choice(men) if not ntrp_on else _pick_by_ntrp_closest(men, None)
-                            men.remove(pick)
-                        elif want_w and women:
-                            pick = random.choice(women) if not ntrp_on else _pick_by_ntrp_closest(women, None)
-                            women.remove(pick)
+                    def _take_from(lst, target_ntrp=None):
+                        if not lst:
+                            return None
+                        if ntrp_on:
+                            pick = _pick_by_ntrp_closest(lst, target_ntrp, rng=rng)
                         else:
-                            rest = men + women
-                            if not rest:
-                                break
-                            pick = random.choice(rest) if not ntrp_on else _pick_by_ntrp_closest(rest, None)
-                            if pick in men:
-                                men.remove(pick)
-                            else:
-                                women.remove(pick)
+                            pick = rng.choice(lst)
+                        try:
+                            lst.remove(pick)
+                        except Exception:
+                            pass
+                        return pick
 
-                        picks.append(pick)
+                    def _take_any(target_ntrp=None):
+                        rest = men + women
+                        if not rest:
+                            return None
+                        if ntrp_on:
+                            pick = _pick_by_ntrp_closest(rest, target_ntrp, rng=rng)
+                        else:
+                            pick = rng.choice(rest)
+                        if pick in men:
+                            try:
+                                men.remove(pick)
+                            except Exception:
+                                pass
+                        elif pick in women:
+                            try:
+                                women.remove(pick)
+                            except Exception:
+                                pass
+                        return pick
+
+                    # 현재(고정된) 값
+                    fixed = {i: v for i, v in enumerate(eff_vs) if v != "선택"}
+                    pick_for_idx = {}
+
+                    # 팀별(0,1)=팀1 / (2,3)=팀2
+                    for a, b in ((0, 1), (2, 3)):
+                        va = fixed.get(a)
+                        vb = fixed.get(b)
+
+                        # 둘 다 고정이면 건드리지 않음(사용자가 강제로 만든 케이스)
+                        if va and vb:
+                            continue
+
+                        # 한 명만 고정이면 반대 성별 파트너를 채움
+                        if (va and not vb) or (vb and not va):
+                            fixed_name = va if va else vb
+                            empty_i = b if va else a
+                            g = _gender_of(fixed_name)
+                            want = "여" if g == "남" else "남"
+                            cand = women if want == "여" else men
+                            pick = _take_from(cand, _ntrp_of(fixed_name))
+                            if pick is None:
+                                pick = _take_any(_ntrp_of(fixed_name))
+                            if pick:
+                                pick_for_idx[empty_i] = pick
+                            continue
+
+                        # 둘 다 비었으면 남/여 한 명씩 선택
+                        if (not va) and (not vb):
+                            if men and women:
+                                m = _take_from(men, None)
+                                # 여성은 남성의 ntrp에 맞춰 고르면 밸런스가 조금 나아짐
+                                target = _ntrp_of(m) if (ntrp_on and m) else None
+                                f = _take_from(women, target)
+                                if m:
+                                    pick_for_idx[a] = m
+                                if f:
+                                    pick_for_idx[b] = f
+                            else:
+                                p1 = _take_any(None)
+                                p2 = _take_any(_ntrp_of(p1) if (ntrp_on and p1) else None)
+                                if p1:
+                                    pick_for_idx[a] = p1
+                                if p2:
+                                    pick_for_idx[b] = p2
+
+                    # 혹시 남/여 밸런스가 부족해서 아직 못 채운 칸이 있으면, 남은 인원으로라도 채움(최후 fallback)
+                    for k in empty_keys:
+                        ii = key_to_idx[k]
+                        if ii not in pick_for_idx:
+                            pick_for_idx[ii] = _take_any(None)
+
+                    picks = [pick_for_idx.get(key_to_idx[k]) for k in empty_keys]
+
 
                 elif gender_mode == "동성":
                     already_gender = _gender_of(already[0]) if already else None
                     cand = men if already_gender == "남" else women if already_gender == "여" else (men if len(men) >= need else women)
                     if len(cand) >= need:
-                        picks = random.sample(cand, need)
+                        picks = rng.sample(cand, need)
 
                 else:
                     rest = men + women
                     if len(rest) >= need:
-                        picks = random.sample(rest, need)
+                        picks = rng.sample(rest, need)
 
                 for k, p in zip(empty_keys, picks):
+                    if not p:
+                        continue
                     plan[k] = p
                     used.add(p)
+                    auto_keys.add(k)
 
-            # ✅ 기존 값 유지
-            for k, v in fixed.items():
-                if v and v != "선택":
-                    plan.setdefault(k, v)
+            return plan, auto_keys
 
-            return plan
-
-        # =========================================================
-        # ✅ 조별 분리 대진 생성용 헬퍼
-        # =========================================================
         def _split_players_ab(players, roster_by_name):
             a = [p for p in players if roster_by_name.get(p, {}).get("group") == "A조"]
             b = [p for p in players if roster_by_name.get(p, {}).get("group") == "B조"]
@@ -5667,17 +5962,33 @@ def render_tab_today_session(tab):
                 st.markdown("</div>", unsafe_allow_html=True)
 
             with b3:
-                st.caption("라운드별 자동 채우기/초기화는 아래 라운드 박스에서도 가능")
+                st.caption("체크된 게임만 자동 채우기/초기화는 아래에서 가능")
 
             # ✅ plan을 '바로' state에 반영 (pending/rerun 제거)
-            def _apply_plan_to_state(plan: dict):
+            # ✅ plan을 '바로' state에 반영 (pending/rerun 제거)
+            def _apply_plan_to_state(plan: dict, auto_keys=None):
+                """plan을 session_state에 반영.
+
+                auto_keys:
+                  - 이번 자동 채우기로 "자동으로 들어간 슬롯"의 key set
+                  - 이 key들은 다음 "빈칸 채우기" 때 다시 랜덤으로 교체 대상이 됨
+                
+                ✅ 중요: 체크된 게임만 채우기처럼 "일부 코트"만 갱신할 때는
+                갱신 대상이 아닌 코트의 기존 auto 플래그는 그대로 유지해야 함.
+                그래서 auto_keys에 포함된 것만 True로 찍고, 나머지는 강제로 False로 만들지 않음.
+                """
                 if not isinstance(plan, dict):
                     return
+                auto_keys = set(auto_keys or [])
                 for k, v in plan.items():
                     if v and v != "선택":
                         st.session_state[k] = v
                         st.session_state[f"_prev_{k}"] = v
-
+                        if k in auto_keys:
+                            st.session_state[f"_auto_{k}"] = True
+                        else:
+                            if f"_auto_{k}" not in st.session_state:
+                                st.session_state[f"_auto_{k}"] = False
             # -------------------------
             # 전체 초기화
             # -------------------------
@@ -5686,16 +5997,25 @@ def render_tab_today_session(tab):
                     for k in _manual_all_keys_for_round(rr, court_count, gtype):
                         st.session_state[k] = "선택"
                         st.session_state[f"_prev_{k}"] = "선택"
+                        st.session_state[f"_auto_{k}"] = False
                 st.session_state.pop("_manual_pending_set", None)  # 혹시 남아있던 거 제거
 
             # -------------------------
             # 전체 라운드 빈칸 채우기
+            #   - ✅ 사용자가 직접 고른 값은 유지
+            #   - ✅ 이전에 자동으로 들어간 값은 이번 클릭에서 다시 랜덤으로 갈아끼움
             # -------------------------
             if fill_all_clicked and players_selected:
-                plan_all = {}
                 gm = _manual_gender_to_mode(manual_gender_mode)
+
+                # ✅ 버튼 누를 때마다 결과가 달라지게
+                seed_base = int(random.random() * 1_000_000_000)
+                st.session_state["_manual_fill_seed"] = seed_base
+
+                plan_all = {}
+                auto_all = set()
                 for rr in range(1, int(total_rounds) + 1):
-                    plan_r = _fill_round_plan(
+                    plan_r, auto_r = _fill_round_plan(
                         r=rr,
                         players_selected=players_selected,
                         court_count=court_count,
@@ -5703,91 +6023,159 @@ def render_tab_today_session(tab):
                         view_mode=view_mode_for_schedule,
                         gender_mode=gm,
                         ntrp_on=bool(manual_fill_ntrp),
+                        seed_base=seed_base,
                     )
                     plan_all.update(plan_r)
+                    auto_all |= set(auto_r or [])
 
                 if plan_all:
-                    _apply_plan_to_state(plan_all)
+                    _apply_plan_to_state(plan_all, auto_all)
                 else:
                     st.info("이미 채울 빈칸이 없어.")
 
+            # ✅ 게임 UI (라운드 구분 없이 나열 + 체크된 게임만 처리)
             # -------------------------
-            # 라운드 UI
+
+            # 게임 목록(라운드/코트 기반) → 화면은 라운드 구분 없이 "게임 번호"로만 보여줌
+            games = []  # [(game_no, r, c)]
+            gno = 0
+            for rr in range(1, int(total_rounds) + 1):
+                for cc in range(1, int(court_count) + 1):
+                    gno += 1
+                    games.append((gno, rr, cc))
+
+            # ✅ 체크박스 키 정리(라운드/코트 수가 바뀌면 오래된 체크 제거)
+            valid_chk = {f"chk_game_{gno}" for (gno, _r, _c) in games}
+            for k in list(st.session_state.keys()):
+                if isinstance(k, str) and k.startswith("chk_game_") and k not in valid_chk:
+                    st.session_state.pop(k, None)
+
+            # ✅ 전체 초기화 눌렀으면 체크도 같이 해제
+            if clear_all_clicked:
+                for k in valid_chk:
+                    st.session_state[k] = False
+
+            # ✅ 체크된 게임 집계
+            selected_games = [(rr, cc) for (gno, rr, cc) in games if st.session_state.get(f"chk_game_{gno}", False)]
+
+            # ✅ 체크된 게임용 버튼
+            t1, t2, t3 = st.columns([3.2, 3.2, 1.6], vertical_alignment="center")
+            with t1:
+                st.markdown('<div class="main-primary-btn">', unsafe_allow_html=True)
+                fill_checked_clicked = st.button(
+                    "체크된 게임만 빈칸 채우기",
+                    use_container_width=True,
+                    key="btn_fill_checked_games",
+                    disabled=(not players_selected),
+                )
+                st.markdown("</div>", unsafe_allow_html=True)
+
+            with t2:
+                st.markdown('<div class="main-danger-btn">', unsafe_allow_html=True)
+                clear_checked_clicked = st.button(
+                    "체크된 게임만 초기화",
+                    use_container_width=True,
+                    key="btn_clear_checked_games",
+                )
+                st.markdown("</div>", unsafe_allow_html=True)
+
+            with t3:
+                st.markdown(
+                    f"<div style='text-align:right; font-weight:800; color:#374151;'>선택됨: {len(selected_games)}게임</div>",
+                    unsafe_allow_html=True,
+                )
+
+            # ✅ 체크된 게임 초기화
+            if clear_checked_clicked and selected_games:
+                for rr, cc in selected_games:
+                    if gtype == "단식":
+                        keys = [_manual_key(rr, cc, 1, gtype), _manual_key(rr, cc, 2, gtype)]
+                    else:
+                        keys = [_manual_key(rr, cc, i, gtype) for i in (1, 2, 3, 4)]
+                    for k in keys:
+                        st.session_state[k] = "선택"
+                        st.session_state[f"_prev_{k}"] = "선택"
+                        st.session_state[f"_auto_{k}"] = False
+
+            # ✅ 체크된 게임 빈칸 채우기
+            if fill_checked_clicked and players_selected and selected_games:
+                gm = _manual_gender_to_mode(manual_gender_mode)
+
+                # ✅ 버튼 누를 때마다 결과가 달라지게
+                seed_base = int(random.random() * 1_000_000_000)
+                st.session_state["_manual_fill_seed"] = seed_base
+
+                # 라운드별로 묶어서, 체크된 코트만 채우기 (라운드 내 중복 방지 유지)
+                by_round = {}
+                for rr, cc in selected_games:
+                    by_round.setdefault(int(rr), []).append(int(cc))
+
+                plan_all = {}
+                auto_all = set()
+                for rr, c_list in by_round.items():
+                    plan_r, auto_r = _fill_round_plan(
+                        r=int(rr),
+                        players_selected=players_selected,
+                        court_count=court_count,
+                        gtype=gtype,
+                        view_mode=view_mode_for_schedule,
+                        gender_mode=gm,
+                        ntrp_on=bool(manual_fill_ntrp),
+                        target_courts=c_list,
+                        seed_base=seed_base,
+                    )
+                    plan_all.update(plan_r)
+                    auto_all |= set(auto_r or [])
+
+                if plan_all:
+                    _apply_plan_to_state(plan_all, auto_all)
+                else:
+                    st.info("체크된 게임에서 채울 빈칸이 없어.")
+
+            st.markdown("<div style='height:0.4rem;'></div>", unsafe_allow_html=True)
+
             # -------------------------
-            for r in range(1, int(total_rounds) + 1):
-                with st.expander(f"라운드 {r}", expanded=(r == 1)):
+            # ✅ 게임 나열 렌더
+            # -------------------------
+            for (gno, rr, cc) in games:
 
-                    used = _round_used_set(r, court_count, gtype)
+                # 헤더(체크 + 게임명)
+                h1, h2 = st.columns([0.9, 9.1], vertical_alignment="center")
+                with h1:
+                    st.checkbox(
+                        "",
+                        value=bool(st.session_state.get(f"chk_game_{gno}", False)),
+                        key=f"chk_game_{gno}",
+                        label_visibility="collapsed",
+                    )
+                with h2:
+                    # ✅ 코트 옆에 남/녀 칩 표시(직관적으로)
+                    if gtype == '단식':
+                        _ks = [_manual_key(rr, cc, 1, gtype), _manual_key(rr, cc, 2, gtype)]
+                    else:
+                        _ks = [_manual_key(rr, cc, i, gtype) for i in (1, 2, 3, 4)]
+                    _vals = [st.session_state.get(k, '선택') for k in _ks]
+                    _chips = _match_chips_html(_vals, gtype)
+                    st.markdown(
+                        f"<div class='msc-gamehead'><div style='font-weight:900;'>게임 {gno} · 코트 {cc}</div><div class='msc-chip-wrap'>{_chips}</div></div>",
+                        unsafe_allow_html=True,
+                    )
 
-                    top1, top2, top3 = st.columns([3.2, 3.2, 1.6], vertical_alignment="center")
+                # 코트 그룹(조별 분리) 반영
+                grp_tag = _court_group_tag(view_mode_for_schedule, cc)
+                pool = _pool_by_group(players_selected, grp_tag)
 
-                    with top1:
-                        st.markdown('<div class="main-primary-btn">', unsafe_allow_html=True)
-                        fill_round_clicked = st.button(
-                            "이 라운드 빈칸 채우기",
-                            use_container_width=True,
-                            key=f"btn_fill_round_{r}",
-                        )
-                        st.markdown("</div>", unsafe_allow_html=True)
+                _render_manual_court_selectboxes(
+                    r=rr,
+                    c=cc,
+                    pool=pool,
+                    court_count=court_count,
+                    gtype=gtype,
+                )
 
-                    with top2:
-                        st.markdown('<div class="main-danger-btn">', unsafe_allow_html=True)
-                        clear_round_clicked = st.button(
-                            "이 라운드 초기화",
-                            use_container_width=True,
-                            key=f"btn_clear_round_{r}",
-                        )
-                        st.markdown("</div>", unsafe_allow_html=True)
+                st.markdown("<div style='height:0.6rem;'></div>", unsafe_allow_html=True)
 
-                    with top3:
-                        st.markdown(
-                            f"<div style='text-align:right; font-weight:700; color:#374151;'>선택됨: {len(used)}명</div>",
-                            unsafe_allow_html=True
-                        )
-
-                    # ✅ 이 라운드 초기화
-                    if clear_round_clicked:
-                        for k in _manual_all_keys_for_round(r, court_count, gtype):
-                            st.session_state[k] = "선택"
-                            st.session_state[f"_prev_{k}"] = "선택"
-
-                    # ✅ 이 라운드 빈칸 채우기
-                    if fill_round_clicked:
-                        plan = _fill_round_plan(
-                            r=r,
-                            players_selected=players_selected,
-                            court_count=court_count,
-                            gtype=gtype,
-                            view_mode=view_mode_for_schedule,
-                            gender_mode=_manual_gender_to_mode(manual_gender_mode),
-                            ntrp_on=bool(manual_fill_ntrp),
-                        )
-                        if plan:
-                            _apply_plan_to_state(plan)
-                        else:
-                            st.info("이 라운드는 이미 빈칸이 없어.")
-
-                    st.markdown("<div style='height:0.6rem;'></div>", unsafe_allow_html=True)
-
-                    # ✅ 코트별 selectbox 렌더 (단식/복식 중복 제거: 헬퍼 1개로 렌더)
-                    for c in range(1, int(court_count) + 1):
-                        st.markdown(f"**코트 {c}**")
-
-                        grp_tag = _court_group_tag(view_mode_for_schedule, c)
-                        pool = _pool_by_group(players_selected, grp_tag)
-
-                        _render_manual_court_selectboxes(
-                            r=r,
-                            c=c,
-                            pool=pool,
-                            court_count=court_count,
-                            gtype=gtype,
-                        )
-
-                        st.markdown("<div style='height:0.6rem;'></div>", unsafe_allow_html=True)
-
-                    st.markdown("---")
-
+            st.markdown("---")
             # -------------------------
             # 수동 대진 리스트 만들기 (실제 위젯 값 기준)
             # -------------------------
@@ -6311,7 +6699,7 @@ with tab3:
         if sel_date == "전체":
             view_mode_scores = "전체"
         else:
-            # ✅ 스코어보드(옵저버)에서는 표시 방식 자체를 숨김 + 전체로 고정
+            # ✅ 옵저버/스코어보드에서는 "표시 방식" 라디오 자체를 숨기고 항상 "전체"로 고정
             if IS_OBSERVER:
                 view_mode_scores = "전체"
             else:
@@ -6332,14 +6720,12 @@ with tab3:
                         index=default_view_index,
                     )
 
-                    # ✅ 선택값 저장(다음에 다시 들어와도 유지) - 관리자만
+                    # ✅ 선택값 저장(다음에 다시 들어와도 유지)
                     if view_mode_scores != saved_view:
                         day_data["score_view_mode"] = view_mode_scores
                         sessions[sel_date] = day_data
                         st.session_state.sessions = sessions
                         save_sessions(sessions)
-
-
 
 
         # 나중에 다시 그리기 위한 요약 컨테이너
@@ -6657,8 +7043,10 @@ with tab3:
                                 wrapper.style.left = "-100000px";
                                 wrapper.style.top = "0";
                                 wrapper.style.background = "#ffffff";
-                                wrapper.style.width = (common.clientWidth || 1200) + "px";
-                                wrapper.style.padding = "0";
+                                const PAD = 24;
+                                wrapper.style.boxSizing = "border-box";
+                                wrapper.style.width = ((common.clientWidth || 1200) + (PAD*2)) + "px";
+                                wrapper.style.padding = PAD + "px";
                                 wrapper.style.margin = "0";
 
                                 for (let i = si + 1; i < ei; i++) {{
@@ -6910,8 +7298,10 @@ with tab3:
                                 wrapper.style.left = "-100000px";
                                 wrapper.style.top = "0";
                                 wrapper.style.background = "#ffffff";
-                                wrapper.style.width = (common.clientWidth || 1200) + "px";
-                                wrapper.style.padding = "0";
+                                const PAD = 24;
+                                wrapper.style.boxSizing = "border-box";
+                                wrapper.style.width = ((common.clientWidth || 1200) + (PAD*2)) + "px";
+                                wrapper.style.padding = PAD + "px";
                                 wrapper.style.margin = "0";
 
                                 for (let i = si + 1; i < ei; i++) {{
@@ -9277,5 +9667,6 @@ with tab5:
 # ✅ 모든 탭 공통 푸터
 # =========================================================
 render_footer()
+
 
 
