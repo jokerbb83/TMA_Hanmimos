@@ -389,6 +389,28 @@ components.html(
       });
     } catch (e) {}
 
+    // ✅ 모바일: 4-1 수동배정 상단 버튼(전체/체크) 2개를 한 줄로 고정
+    try {
+      const btnTexts = [
+        '빈칸 자동 채우기(전체 라운드)',
+        '전체 초기화(수동 입력)',
+        '체크된 게임만 빈칸 채우기',
+        '체크된 게임만 초기화'
+      ];
+
+      const buttons = Array.from(doc.querySelectorAll('button'));
+      const findBtn = (t) => buttons.find(b => ((b.innerText||'').trim() === t));
+      const markRow = (btn) => {
+        if(!btn) return;
+        const hb = btn.closest('div[data-testid="stHorizontalBlock"]');
+        if (hb) hb.classList.add('msc-no-wrap-hb');
+      };
+
+      // 첫 버튼이 속한 row에만 클래스 추가하면 2개 버튼이 같이 고정됨
+      markRow(findBtn(btnTexts[0]));
+      markRow(findBtn(btnTexts[2]));
+    } catch (e) {}
+
   }
 
   patch();
@@ -564,6 +586,39 @@ st.markdown("""
   min-width: 0 !important;
 }
 
+
+/* ✅ 모바일: 4-1 수동배정 버튼 2개(전체/체크)도 한줄 고정 */
+@media (max-width: 900px){
+  /* Streamlit이 모바일에서 컬럼을 100% 폭으로 스택 처리함 → nowrap만 걸면 100%+100%가 옆으로 튐
+     그래서 이 줄(클래스 부여된 stHorizontalBlock)만 컬럼 폭을 강제로 50%로 축소 */
+  div[data-testid="stHorizontalBlock"].msc-no-wrap-hb{
+    flex-wrap: nowrap !important;
+    gap: 12px !important;
+    align-items: stretch !important;
+  }
+  /* 컬럼 wrapper(테스트 id가 버전마다 다를 수 있어 넓게 잡음) */
+  div[data-testid="stHorizontalBlock"].msc-no-wrap-hb > div{
+    flex: 1 1 0 !important;
+    width: 0 !important;          /* ✅ 핵심: 모바일에서 100%로 고정되는 폭을 무력화 */
+    min-width: 0 !important;
+    max-width: none !important;
+  }
+  /* 내부 컨테이너는 100%로 */
+  div[data-testid="stHorizontalBlock"].msc-no-wrap-hb > div > div{
+    width: 100% !important;
+  }
+  /* 버튼 자체도 모바일에서 살짝 컴팩트하게 (한눈에 들어오게) */
+  div[data-testid="stHorizontalBlock"].msc-no-wrap-hb button{
+    width: 100% !important;
+    min-height: 54px !important;
+    height: auto !important;
+    padding: 0.55rem 0.65rem !important;
+    font-size: 0.95rem !important;
+    line-height: 1.15 !important;
+    white-space: normal !important;   /* 글자 길면 2줄 허용(가로 넘침 방지) */
+    word-break: keep-all !important;
+  }
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -4624,96 +4679,81 @@ def render_tab_today_session(tab):
                 picks = []
 
                 if gender_mode == "혼합":
-                    # ✅ 혼합복식(남+여 vs 남+여) 강제:
-                    #    팀1(슬롯1,2)과 팀2(슬롯3,4) 각각이 (남1+여1)이 되도록 채운다.
-                    key_to_idx = {k: i for i, k in enumerate(ks)}
+                    # ✅ 혼합(복식): 팀이 무조건 남+여 / 남+여가 되도록 채움 (남,남 vs 여,여 방지)
+                    if gtype == "복식" and len(ks) == 4:
+                        pos_map = {kk: i for i, kk in enumerate(ks)}
+                        eff_tmp = list(eff_vs)
 
-                    def _take_from(lst, target_ntrp=None):
-                        if not lst:
-                            return None
-                        if ntrp_on:
-                            pick = _pick_by_ntrp_closest(lst, target_ntrp, rng=rng)
-                        else:
-                            pick = rng.choice(lst)
-                        try:
-                            lst.remove(pick)
-                        except Exception:
-                            pass
-                        return pick
+                        def _pick_from(cands):
+                            if not cands:
+                                return None
+                            return (
+                                rng.choice(cands)
+                                if not ntrp_on
+                                else _pick_by_ntrp_closest(cands, None, rng=rng)
+                            )
 
-                    def _take_any(target_ntrp=None):
-                        rest = men + women
-                        if not rest:
-                            return None
-                        if ntrp_on:
-                            pick = _pick_by_ntrp_closest(rest, target_ntrp, rng=rng)
-                        else:
-                            pick = rng.choice(rest)
-                        if pick in men:
-                            try:
-                                men.remove(pick)
-                            except Exception:
-                                pass
-                        elif pick in women:
-                            try:
-                                women.remove(pick)
-                            except Exception:
-                                pass
-                        return pick
+                        for kk in empty_keys:
+                            i = pos_map.get(kk, None)
+                            if i is None:
+                                continue
 
-                    # 현재(고정된) 값
-                    fixed = {i: v for i, v in enumerate(eff_vs) if v != "선택"}
-                    pick_for_idx = {}
+                            # 팀 내 짝 인덱스: 0<->1, 2<->3
+                            mate_i = (i - 1) if (i % 2 == 1) else (i + 1)
+                            mate = eff_tmp[mate_i] if 0 <= mate_i < len(eff_tmp) else "선택"
 
-                    # 팀별(0,1)=팀1 / (2,3)=팀2
-                    for a, b in ((0, 1), (2, 3)):
-                        va = fixed.get(a)
-                        vb = fixed.get(b)
-
-                        # 둘 다 고정이면 건드리지 않음(사용자가 강제로 만든 케이스)
-                        if va and vb:
-                            continue
-
-                        # 한 명만 고정이면 반대 성별 파트너를 채움
-                        if (va and not vb) or (vb and not va):
-                            fixed_name = va if va else vb
-                            empty_i = b if va else a
-                            g = _gender_of(fixed_name)
-                            want = "여" if g == "남" else "남"
-                            cand = women if want == "여" else men
-                            pick = _take_from(cand, _ntrp_of(fixed_name))
-                            if pick is None:
-                                pick = _take_any(_ntrp_of(fixed_name))
-                            if pick:
-                                pick_for_idx[empty_i] = pick
-                            continue
-
-                        # 둘 다 비었으면 남/여 한 명씩 선택
-                        if (not va) and (not vb):
-                            if men and women:
-                                m = _take_from(men, None)
-                                # 여성은 남성의 ntrp에 맞춰 고르면 밸런스가 조금 나아짐
-                                target = _ntrp_of(m) if (ntrp_on and m) else None
-                                f = _take_from(women, target)
-                                if m:
-                                    pick_for_idx[a] = m
-                                if f:
-                                    pick_for_idx[b] = f
+                            if mate != "선택":
+                                # 팀의 한 명이 이미 정해졌으면 반대 성별을 강제
+                                need_g = "여" if _gender_of(mate) == "남" else "남"
+                                cand = men if need_g == "남" else women
+                                pick = _pick_from(cand) or _pick_from(men + women)
                             else:
-                                p1 = _take_any(None)
-                                p2 = _take_any(_ntrp_of(p1) if (ntrp_on and p1) else None)
-                                if p1:
-                                    pick_for_idx[a] = p1
-                                if p2:
-                                    pick_for_idx[b] = p2
+                                # 팀이 둘 다 비어있으면:
+                                #  - t1a/t2a(0/2)는 남 우선
+                                #  - t1b/t2b(1/3)는 여 우선
+                                prefer_g = "남" if i in (0, 2) else "여"
+                                primary = men if prefer_g == "남" else women
+                                secondary = women if prefer_g == "남" else men
+                                pick = _pick_from(primary) or _pick_from(secondary) or _pick_from(men + women)
 
-                    # 혹시 남/여 밸런스가 부족해서 아직 못 채운 칸이 있으면, 남은 인원으로라도 채움(최후 fallback)
-                    for k in empty_keys:
-                        ii = key_to_idx[k]
-                        if ii not in pick_for_idx:
-                            pick_for_idx[ii] = _take_any(None)
+                            if pick is None:
+                                break
 
-                    picks = [pick_for_idx.get(key_to_idx[k]) for k in empty_keys]
+                            # 후보군에서 제거(중복 방지)
+                            if pick in men:
+                                men.remove(pick)
+                            if pick in women:
+                                women.remove(pick)
+
+                            picks.append(pick)
+                            eff_tmp[i] = pick
+
+                    else:
+                        # 단식/기타: 가능한 한 1남 1여가 되게 채움(가능할 때)
+                        already_m = sum(1 for x in already if _gender_of(x) == "남")
+                        already_w = sum(1 for x in already if _gender_of(x) == "여")
+
+                        while len(picks) < need:
+                            want_m = (already_m + sum(1 for x in picks if _gender_of(x) == "남")) < 1
+                            want_w = (already_w + sum(1 for x in picks if _gender_of(x) == "여")) < 1
+
+                            if want_m and men:
+                                pick = rng.choice(men) if not ntrp_on else _pick_by_ntrp_closest(men, None, rng=rng)
+                                men.remove(pick)
+                            elif want_w and women:
+                                pick = rng.choice(women) if not ntrp_on else _pick_by_ntrp_closest(women, None, rng=rng)
+                                women.remove(pick)
+                            else:
+                                rest = men + women
+                                if not rest:
+                                    break
+                                pick = rng.choice(rest) if not ntrp_on else _pick_by_ntrp_closest(rest, None, rng=rng)
+                                if pick in men:
+                                    men.remove(pick)
+                                else:
+                                    women.remove(pick)
+
+                            picks.append(pick)
 
 
                 elif gender_mode == "동성":
@@ -4728,8 +4768,6 @@ def render_tab_today_session(tab):
                         picks = rng.sample(rest, need)
 
                 for k, p in zip(empty_keys, picks):
-                    if not p:
-                        continue
                     plan[k] = p
                     used.add(p)
                     auto_keys.add(k)
@@ -5928,7 +5966,6 @@ def render_tab_today_session(tab):
             st.markdown("---")
             st.subheader("4-1. 직접 배정(수동) 입력")
             st.caption("※ 한 라운드 안에서는 같은 선수가 중복 선택되지 않도록 제한됩니다.")
-
             # ✅ pending → session_state (위젯 렌더 전에만!)
             _apply_manual_pending()
 
@@ -5942,7 +5979,8 @@ def render_tab_today_session(tab):
             )
             manual_fill_ntrp = st.checkbox("NTRP 고려", key="manual_fill_ntrp")
 
-            b1, b2, b3 = st.columns(3)
+            # ✅ 모바일에서도 버튼 2개를 한 줄(좌/우 반반)로 유지
+            b1, b2 = st.columns(2)
             with b1:
                 st.markdown('<div class="main-primary-btn">', unsafe_allow_html=True)
                 fill_all_clicked = st.button(
@@ -5961,8 +5999,7 @@ def render_tab_today_session(tab):
                 )
                 st.markdown("</div>", unsafe_allow_html=True)
 
-            with b3:
-                st.caption("체크된 게임만 자동 채우기/초기화는 아래에서 가능")
+            st.caption("체크된 게임만 자동 채우기/초기화는 아래에서 가능")
 
             # ✅ plan을 '바로' state에 반영 (pending/rerun 제거)
             # ✅ plan을 '바로' state에 반영 (pending/rerun 제거)
@@ -6058,8 +6095,8 @@ def render_tab_today_session(tab):
             # ✅ 체크된 게임 집계
             selected_games = [(rr, cc) for (gno, rr, cc) in games if st.session_state.get(f"chk_game_{gno}", False)]
 
-            # ✅ 체크된 게임용 버튼
-            t1, t2, t3 = st.columns([3.2, 3.2, 1.6], vertical_alignment="center")
+            # ✅ 체크된 게임용 버튼 (✅ 모바일에서도 한 줄로)
+            t1, t2 = st.columns(2)
             with t1:
                 st.markdown('<div class="main-primary-btn">', unsafe_allow_html=True)
                 fill_checked_clicked = st.button(
@@ -6079,11 +6116,10 @@ def render_tab_today_session(tab):
                 )
                 st.markdown("</div>", unsafe_allow_html=True)
 
-            with t3:
-                st.markdown(
-                    f"<div style='text-align:right; font-weight:800; color:#374151;'>선택됨: {len(selected_games)}게임</div>",
-                    unsafe_allow_html=True,
-                )
+            st.markdown(
+                f"<div style='text-align:right; font-weight:800; color:#374151; margin-top:0.3rem;'>선택됨: {len(selected_games)}게임</div>",
+                unsafe_allow_html=True,
+            )
 
             # ✅ 체크된 게임 초기화
             if clear_checked_clicked and selected_games:
@@ -6140,7 +6176,7 @@ def render_tab_today_session(tab):
             for (gno, rr, cc) in games:
 
                 # 헤더(체크 + 게임명)
-                h1, h2 = st.columns([0.9, 9.1], vertical_alignment="center")
+                h1, h2 = st.columns([0.3, 9.1], vertical_alignment="center")
                 with h1:
                     st.checkbox(
                         "",
@@ -7793,7 +7829,7 @@ with tab3:
                             else:
                                 # ✅ PC에서는 좌우를 확 넓혀서 이름이 절대 안 꺾이게
                                 col_t1_side, col_s1, col_vs, col_s2, col_t2_side = st.columns(
-                                    [3.8, 0.9, 0.4, 0.9, 3.8]
+                                    [3, 1.1, 0.7, 1.1, 3]
                                 )
 
                             # 왼쪽 팀 (유대한 / 배성균 / 모름)
@@ -8545,7 +8581,7 @@ with tab3:
                                                 if k in st.session_state:
                                                     del st.session_state[k]
 
-                                            st.session_state["_flash_day_edit_msg"] = "✅ 게임 순서 교환 완료! (점수도 함께 교환됨)"
+                                            st.session_state["_flash_day_edit_msg"] = "✅ 게임 순서 교환 완료! (점수도 교환됐는지 확인 바람)"
                                             safe_rerun()
 
 # 2. 오늘의 요약 리포트 (자동 생성)
@@ -9217,7 +9253,7 @@ with tab5:
                     # 1. 월간 선수 순위표
                     # =========================================================
                     st.subheader("1. 월간 선수 순위표")
-
+                    st.caption("승=3점, 무=1점, 패=0점")
                     rank_view_mode = st.radio(
                         "순위표 보기 방식",
                         ["전체", "조별 보기 (A/B조)"],
@@ -9667,6 +9703,5 @@ with tab5:
 # ✅ 모든 탭 공통 푸터
 # =========================================================
 render_footer()
-
 
 
