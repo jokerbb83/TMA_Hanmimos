@@ -26,7 +26,7 @@ import streamlit.components.v1 as components
 #   - 스코어보드(읽기전용) 타이틀/색/푸터는 APP_MODE로 자동 분기
 # =========================================================
 def CLUB_NAME() -> str:
-    return "HANMIMOS"
+    return "마리아상암포바"
 
 # ✅ 관리자(메인) 앱 타이틀
 ADMIN_PURPOSE = "관리 도우미(Beta)"  # 예: "도우미 (Beta)"
@@ -1024,7 +1024,7 @@ def build_daily_report(sel_date, day_data):
         who = sorted(winners, key=lambda x: x)[0]
         r = recs[who]
         lines.append(
-            f"오늘의 MOM: {who} ({r['W']}승 {r['D']}무 {r['L']}패, 득실차 {_diff(who)}점)"
+            f"오늘의 MVP: {who} ({r['W']}승 {r['D']}무 {r['L']}패, 득실차 {_diff(who)}점)"
         )
 
     # 3) 무패 선수
@@ -5858,7 +5858,7 @@ def render_tab_today_session(tab):
                 mode_label = st.selectbox(
                     "복식 대진 방식",
                     doubles_modes,
-                    index=2,
+                    index=3,
                     key="doubles_mode_select",
                     disabled=is_manual_mode,
                 )
@@ -7156,6 +7156,13 @@ with tab3:
                     # ✅ 캡처 범위 시작 마커
                     st.markdown(f'<div id="{capture_id_p}__start"></div>', unsafe_allow_html=True)
 
+                    # =========================================================
+                    # ✅ [캡처용] 개인별 스코어 테이블 HTML(전체 행) 수집
+                    #   - PC st.dataframe은 스크롤/가상렌더 때문에 캡처가 비거나 일부만 잡힐 수 있음
+                    #   - 따라서 동일 내용을 Styler.to_html()로 따로 만들어 오프스크린에 두고 캡처함
+                    # =========================================================
+                    capture_personal_parts = []  # [(title, html), ...]
+
                     def render_player_score_table(title, per_dict):
                         if not per_dict:
                             return
@@ -7232,6 +7239,15 @@ with tab3:
 
                         sty_players = colorize_df_names(df_players, roster_by_name, ["이름"])
                         sty_players = sty_players.applymap(highlight_win_loss, subset=game_cols)
+                        # ✅ 캡처용 HTML(전체 행 포함)
+                        try:
+                            capture_personal_parts.append((title, sty_players.to_html()))
+                        except Exception:
+                            try:
+                                capture_personal_parts.append((title, df_players.to_html(index=True)))
+                            except Exception:
+                                pass
+
                         smart_table(sty_players)
 
                     # =========================================================
@@ -7263,6 +7279,29 @@ with tab3:
                     # ✅ [개인별 보기] 이미지 저장 버튼만 (JPEG)
                     #   - start/end 사이 DOM을 복제해서 캡처
                     # =========================================================
+                                        # =========================================================
+                    # ✅ [개인별 보기] 이미지 저장 (JPEG)
+                    #   - PC st.dataframe(가상 렌더/스크롤) 캡처 시 빈 화면/일부 누락 이슈가 있어
+                    #     위에서 수집한 Styler.to_html() 전체 테이블을 오프스크린에 렌더 후 캡처
+                    # =========================================================
+                    _cap_wrapper_id = f"{capture_id_p}__fullhtml"
+                    _cap_html = (
+                        f"<div id='{_cap_wrapper_id}' "
+                        f"style='position:fixed; left:-100000px; top:0; background:#ffffff; "
+                        f"padding:24px; box-sizing:border-box;'>"
+                        f"<style>"
+                        f"table{{border-collapse:collapse; width:auto;}}"
+                        f"th,td{{border:1px solid #e5e7eb; padding:8px 10px; font-size:14px;}}"
+                        f"th{{background:#f9fafb; font-weight:800;}}"
+                        f"</style>"
+                    )
+                    for _t, _h in capture_personal_parts:
+                        _cap_html += f"<div style='font-weight:900; font-size:26px; margin:0 0 10px 0;'>{html.escape(str(_t))}</div>"
+                        _cap_html += _h
+                        _cap_html += "<div style='height:18px;'></div>"
+                    _cap_html += "</div>"
+                    st.markdown(_cap_html, unsafe_allow_html=True)
+
                     components.html(
                         f"""
                         <div style="display:flex; gap:12px; margin-top:14px; align-items:center;">
@@ -7277,10 +7316,12 @@ with tab3:
                         <script>
                         (function() {{
                           const capId = {json.dumps(capture_id_p)};
-                          const fileName = "개인별표_" + {json.dumps(str(sel_date))}.replace(/[^0-9a-zA-Z_\\-]+/g, "_") + ".jpg";
+                          const wrapperId = capId + "__fullhtml";
+                          const fileName = "개인별표_" + {json.dumps(str(sel_date))}.replace(/[^0-9a-zA-Z_\-]+/g, "_") + ".jpg";
 
-                          const msgEl  = document.getElementById(capId + "__msg");
-                          const btnSave = document.getElementById(capId + "__save");
+                          const pdoc = window.parent.document;
+                          const msgEl  = pdoc.getElementById(capId + "__msg") || document.getElementById(capId + "__msg");
+                          const btnSave = pdoc.getElementById(capId + "__save") || document.getElementById(capId + "__save");
 
                           function setMsg(m) {{
                             if (msgEl) msgEl.textContent = m;
@@ -7305,66 +7346,31 @@ with tab3:
                             btnSave.onclick = async function() {{
                               try {{
                                 setMsg("이미지 생성중…");
-                                const pdoc = window.parent.document;
-
-                                const start = pdoc.getElementById(capId + "__start");
-                                const end   = pdoc.getElementById(capId + "__end");
-                                if (!start || !end) {{
-                                  setMsg("캡처 마커를 찾지 못했어.");
+                                const el = pdoc.getElementById(wrapperId);
+                                if (!el) {{
+                                  setMsg("캡처 대상 테이블을 찾지 못했어.");
                                   return;
                                 }}
-
-                                const startTop = start.closest('div[data-testid="stElementContainer"]')
-                                              || start.closest('div.element-container')
-                                              || start.parentElement;
-
-                                const endTop   = end.closest('div[data-testid="stElementContainer"]')
-                                              || end.closest('div.element-container')
-                                              || end.parentElement;
-
-                                let common = startTop ? startTop.parentElement : null;
-                                while (common && endTop && !common.contains(endTop)) {{
-                                  common = common.parentElement;
-                                }}
-                                if (!common) {{
-                                  setMsg("캡처 범위(공통부모) 찾기 실패");
-                                  return;
-                                }}
-
-                                const kids = Array.from(common.children);
-                                const si = kids.indexOf(startTop);
-                                const ei = kids.indexOf(endTop);
-
-                                if (si < 0 || ei < 0 || ei <= si) {{
-                                  setMsg("캡처 범위 인덱스 오류");
-                                  return;
-                                }}
-
-                                const wrapper = pdoc.createElement("div");
-                                wrapper.style.position = "fixed";
-                                wrapper.style.left = "-100000px";
-                                wrapper.style.top = "0";
-                                wrapper.style.background = "#ffffff";
-                                const PAD = 24;
-                                wrapper.style.boxSizing = "border-box";
-                                wrapper.style.width = ((common.clientWidth || 1200) + (PAD*2)) + "px";
-                                wrapper.style.padding = PAD + "px";
-                                wrapper.style.margin = "0";
-
-                                for (let i = si + 1; i < ei; i++) {{
-                                  wrapper.appendChild(kids[i].cloneNode(true));
-                                }}
-
-                                pdoc.body.appendChild(wrapper);
 
                                 const h2c = await ensureHtml2Canvas();
-                                const canvas = await h2c(wrapper, {{
+
+                                // ✅ 렌더 안정화(스타일/폰트 적용 대기)
+                                await new Promise(r => setTimeout(r, 120));
+
+                                const w = Math.max(el.scrollWidth, el.offsetWidth, 800);
+                                const h = Math.max(el.scrollHeight, el.offsetHeight, 600);
+
+                                const canvas = await h2c(el, {{
                                   backgroundColor: "#ffffff",
                                   scale: 2,
-                                  useCORS: true
+                                  useCORS: true,
+                                  width: w,
+                                  height: h,
+                                  windowWidth: w,
+                                  windowHeight: h,
+                                  scrollX: 0,
+                                  scrollY: 0
                                 }});
-
-                                wrapper.remove();
 
                                 const url = canvas.toDataURL("image/jpeg", 0.95);
                                 const a = pdoc.createElement("a");
@@ -7386,9 +7392,6 @@ with tab3:
                         """,
                         height=80,
                     )
-
-
-
 
 # =========================================================
 
