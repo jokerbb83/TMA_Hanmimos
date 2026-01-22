@@ -35,7 +35,7 @@ ADMIN_PURPOSE = "관리 도우미(Beta)"  # 예: "도우미 (Beta)"
 SCOREBOARD_PURPOSE = "스코어보드 (Beta)"
 
 # ✅ 데이터 파일 prefix (예: "MSC" → MSC_players.json / MSC_sessions.json)
-DATA_FILE_PREFIX = "HMC"
+DATA_FILE_PREFIX = "MSC"
 
 # ✅ 앱 모드: "admin"(기본) / "observer"(옵저버) / "scoreboard"(스코어보드)
 APP_MODE = os.getenv("MSC_APP_MODE", "admin").strip().lower()
@@ -989,32 +989,43 @@ def build_daily_report(sel_date, day_data):
 
     # 1) 기본 출석 / 경기 수
     lines.append(f"출석 인원 {len(attendees)}명, 점수 입력된 경기 {total_games}게임")
+    # 2) 오늘의 MVP (최다승 → 동률이면 득실차)
+    best_wins = -1
+    candidates = []
+    member_set = None
+    try:
+        global roster
+        if isinstance(roster, list):
+            member_set = {p.get('name') for p in roster}
+    except Exception:
+        member_set = None
 
-    # 2) 승점왕 / 공동 승점왕
-    best_points = -1
-    best_players = []
     for name, r in recs.items():
-        if r["G"] == 0:
+        if r.get('G', 0) == 0:
             continue
-        if r["points"] > best_points:
-            best_points = r["points"]
-            best_players = [name]
-        elif r["points"] == best_points:
-            best_players.append(name)
+        if name == '게스트':
+            continue
+        if member_set is not None and name not in member_set:
+            continue
+        w = r.get('W', 0)
+        if w > best_wins:
+            best_wins = w
+            candidates = [name]
+        elif w == best_wins:
+            candidates.append(name)
 
-    if best_players and best_points >= 0:
-        if len(best_players) == 1:
-            who = best_players[0]
-            r = recs[who]
-            lines.append(
-                f"오늘의 MVP: {who} (승점 {best_points}점, {r['W']}승 {r['D']}무 {r['L']}패)"
-            )
-        else:
-            names_str = ", ".join(best_players)
-            example = recs[best_players[0]]
-            lines.append(
-                f"오늘의 공동 MVP: {names_str} (모두 승점 {best_points}점, 예: {example['W']}승 {example['D']}무 {example['L']}패)"
-            )
+    if candidates and best_wins >= 0:
+        def _diff(n):
+            rr = recs[n]
+            return int(rr.get('score_for', 0) - rr.get('score_against', 0))
+
+        best_diff = max(_diff(n) for n in candidates)
+        winners = [n for n in candidates if _diff(n) == best_diff]
+        who = sorted(winners, key=lambda x: x)[0]
+        r = recs[who]
+        lines.append(
+            f"오늘의 MOM: {who} ({r['W']}승 {r['D']}무 {r['L']}패, 득실차 {_diff(who)}점)"
+        )
 
     # 3) 무패 선수
     undefeated = [name for name, r in recs.items() if r["G"] > 0 and r["L"] == 0]
@@ -9509,6 +9520,38 @@ with tab5:
                 best_mbti = best_by_category("MBTI", lambda m: m.get("mbti", "모름"), exclude_values={"모름"})
 
                 # 🎯 노자비왕(득-실) — 점수 입력된 경기 기준으로 평균
+                # 🏆 MVP (월간) — 1) 승점 최다 → 2) 출석일(적은 사람) → 3) 총득실차(큰 사람) → 4) 이름
+                mvp_line = "데이터 부족"
+                _mvp_candidates = [
+                    (name, r)
+                    for name, r in recs.items()
+                    if r.get("G", 0) > 0 and (not is_guest_name(name, roster))
+                ]
+                if _mvp_candidates:
+                    # 1) 승점 최다
+                    best_pts = max(r.get("points", 0) for _, r in _mvp_candidates)
+                    tied = [(name, r) for name, r in _mvp_candidates if r.get("points", 0) == best_pts]
+
+                    # 2) 출석일이 적은 사람 (동점일 때만)
+                    if len(tied) > 1:
+                        min_days = min(len(r.get("days", set()) or set()) for _, r in tied)
+                        tied = [(name, r) for name, r in tied if len(r.get("days", set()) or set()) == min_days]
+
+                    # 3) 총득실차(득점-실점) 큰 사람
+                    if len(tied) > 1:
+                        def _diff(_r):
+                            return int(_r.get("score_for", 0) or 0) - int(_r.get("score_against", 0) or 0)
+                        best_diff = max(_diff(r) for _, r in tied)
+                        tied = [(name, r) for name, r in tied if _diff(r) == best_diff]
+
+                    # 4) 그래도 동점이면 이름순 1명
+                    tied.sort(key=lambda x: str(x[0]))
+                    winner_name, winner_rec = tied[0]
+                    _days = len(winner_rec.get("days", set()) or set())
+                    _diff_total = int(winner_rec.get("score_for", 0) or 0) - int(winner_rec.get("score_against", 0) or 0)
+                    mvp_line = f"{winner_name} (승점 {best_pts}점, 참석 {_days}일, 득실차 {_diff_total})"
+
+
                 diff_stats = []
                 for name, r in recs.items():
                     if is_guest_name(name, roster):
@@ -9688,6 +9731,7 @@ with tab5:
                             🏅 선수별 BEST
                         </div>
                         <ul style="padding-left:1.1rem;margin:0;font-size:0.9rem;">
+                            <li>🏆 MVP&nbsp;:&nbsp;{mvp_line}</li>
                             <li>🎯 격차왕&nbsp;:&nbsp;{diff_line}</li>
                             <li>🤝 우정왕&nbsp;:&nbsp;{partner_line}</li>
                             <li>👑 출석왕&nbsp;:&nbsp;{attendance_line}</li>
@@ -9703,5 +9747,9 @@ with tab5:
 # ✅ 모든 탭 공통 푸터
 # =========================================================
 render_footer()
+
+
+
+
 
 
