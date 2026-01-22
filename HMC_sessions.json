@@ -748,6 +748,7 @@
       "한승현": "A조",
       "홍성현": "B조"
     },
-    "scores_locked": true
+    "scores_locked": true,
+    "score_view_mode": "조별 보기 (A/B조)"
   }
 }
