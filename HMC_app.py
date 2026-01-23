@@ -29,7 +29,7 @@ from PIL import Image
 #   - 스코어보드(읽기전용) 타이틀/색/푸터는 APP_MODE로 자동 분기
 # =========================================================
 def CLUB_NAME() -> str:
-    return "마리아상암포바"
+    return "HANMIMOS"
 
 # ✅ 관리자(메인) 앱 타이틀
 ADMIN_PURPOSE = "관리 도우미(Beta)"  # 예: "도우미 (Beta)"
@@ -38,7 +38,7 @@ ADMIN_PURPOSE = "관리 도우미(Beta)"  # 예: "도우미 (Beta)"
 SCOREBOARD_PURPOSE = "스코어보드 (Beta)"
 
 # ✅ 데이터 파일 prefix (예: "MSC" → MSC_players.json / MSC_sessions.json)
-DATA_FILE_PREFIX = "MSC"
+DATA_FILE_PREFIX = "HMC"
 
 # ✅ 앱 모드: "admin"(기본) / "observer"(옵저버) / "scoreboard"(스코어보드)
 APP_MODE = os.getenv("MSC_APP_MODE", "admin").strip().lower()
@@ -5960,7 +5960,7 @@ def render_tab_today_session(tab):
                 mode_label = st.selectbox(
                     "복식 대진 방식",
                     doubles_modes,
-                    index=3,
+                    index=2,
                     key="doubles_mode_select",
                     disabled=is_manual_mode,
                 )
