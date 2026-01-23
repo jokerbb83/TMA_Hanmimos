@@ -19,6 +19,9 @@ import requests
 import streamlit as st
 import streamlit.components.v1 as components
 
+import io
+from PIL import Image
+
 
 # =========================================================
 # ✅ 멀티 동호회용 설정
@@ -35,7 +38,7 @@ ADMIN_PURPOSE = "관리 도우미(Beta)"  # 예: "도우미 (Beta)"
 SCOREBOARD_PURPOSE = "스코어보드 (Beta)"
 
 # ✅ 데이터 파일 prefix (예: "MSC" → MSC_players.json / MSC_sessions.json)
-DATA_FILE_PREFIX = "MSC"
+DATA_FILE_PREFIX = "HMC"
 
 # ✅ 앱 모드: "admin"(기본) / "observer"(옵저버) / "scoreboard"(스코어보드)
 APP_MODE = os.getenv("MSC_APP_MODE", "admin").strip().lower()
@@ -301,7 +304,7 @@ st.markdown("""
 .msc-gamehead{display:flex; align-items:center; justify-content:flex-start; gap:10px; flex-wrap:wrap;}
 .msc-chip-wrap{display:flex; align-items:center; justify-content:flex-start; gap:6px; flex-wrap:wrap;}
 .msc-vs{display:inline-block; margin:0 6px; font-weight:900; font-size:0.78rem; color:#6b7280;}
-.msc-chip{display:inline-block; padding:4px 10px; border-radius:999px; font-size:0.78rem; font-weight:800; line-height:1;}
+.msc-chip{display:inline-block; padding:2px 6px; border-radius:999px; font-size:0.78rem; font-weight:800; line-height:1;}
 .msc-chip-m{background:#dbeafe; color:#1e40af;}
 .msc-chip-f{background:#ffe4e6; color:#be123c;}
 .msc-chip-u{background:#e5e7eb; color:#374151;}
@@ -1024,7 +1027,7 @@ def build_daily_report(sel_date, day_data):
         who = sorted(winners, key=lambda x: x)[0]
         r = recs[who]
         lines.append(
-            f"오늘의 MOM: {who} ({r['W']}승 {r['D']}무 {r['L']}패, 득실차 {_diff(who)}점)"
+            f"오늘의 MVP: {who} ({r['W']}승 {r['D']}무 {r['L']}패, 득실차 {_diff(who)}점)"
         )
 
     # 3) 무패 선수
@@ -4541,6 +4544,7 @@ def render_tab_today_session(tab):
             view_mode: str,
             gender_mode: str,  # "랜덤" / "동성" / "혼합"
             ntrp_on: bool,
+            same_gender_submode: str | None = None,  # '동성복식'/'남성복식'/'여성복식' (gender_mode=='동성'일 때만)
             target_courts=None,  # ex) [1,3] 처럼 특정 코트만 채우고 싶을 때
             seed_base: int | None = None,
         ):
@@ -4768,10 +4772,108 @@ def render_tab_today_session(tab):
 
 
                 elif gender_mode == "동성":
+
+
+                    # ✅ 동성(복식): 기본은 '동성복식'(남복/여복 랜덤)이며,
+
+
+                    #    체크된 게임만 채우기에서는 '남성복식/여성복식'을 강제할 수 있음.
+
+
+                    #    단, 인원이 부족하면 다른 성별이 섞여도 OK(가능하면 맞추고, 부족하면 완화).
+
+
                     already_gender = _gender_of(already[0]) if already else None
-                    cand = men if already_gender == "남" else women if already_gender == "여" else (men if len(men) >= need else women)
+
+
+
+                    # 1) 이미 한 명이라도 고정되어 있으면 그 성별을 우선
+
+
+                    desired = already_gender if already_gender in ("남", "여") else None
+
+
+
+                    # 2) 사용자 지정 서브모드 반영(남성복식/여성복식/동성복식)
+
+
+                    sub = (same_gender_submode or "동성복식").strip()
+
+
+                    if desired is None:
+
+
+                        if sub == "남성복식":
+
+
+                            desired = "남"
+
+
+                        elif sub == "여성복식":
+
+
+                            desired = "여"
+
+
+                        else:
+
+
+                            # 동성복식: 남/여 둘 다 가능하면 랜덤, 한쪽만 가능하면 그쪽
+
+
+                            can_m = len(men) >= need
+
+
+                            can_f = len(women) >= need
+
+
+                            if can_m and can_f:
+
+
+                                desired = rng.choice(["남", "여"])
+
+
+                            elif can_m:
+
+
+                                desired = "남"
+
+
+                            elif can_f:
+
+
+                                desired = "여"
+
+
+                            else:
+
+
+                                desired = None
+
+
+
+                    # 3) 가능한 한 desired 성별로 채우되, 부족하면 완화해서 섞어도 허용
+
+
+                    cand = men if desired == "남" else women if desired == "여" else (men + women)
+
+
                     if len(cand) >= need:
+
+
                         picks = rng.sample(cand, need)
+
+
+                    else:
+
+
+                        rest = men + women
+
+
+                        if len(rest) >= need:
+
+
+                            picks = rng.sample(rest, need)
 
                 else:
                     rest = men + women
@@ -5597,7 +5699,7 @@ def render_tab_today_session(tab):
                     f"<span style='"
                     f"display:inline-block;"
                     f"margin:2px 6px 2px 0;"
-                    f"padding:4px 10px;"
+                    f"padding:2px 6px;"
                     f"border-radius:999px;"
                     f"border:1px solid {color};"
                     f"background:{color}22;"
@@ -5776,7 +5878,7 @@ def render_tab_today_session(tab):
                     "<span style='"
                     "display:inline-block;"
                     "margin:2px 6px 2px 0;"
-                    "padding:4px 10px;"
+                    "padding:2px 6px;"
                     "border-radius:999px;"
                     "border:1px solid #9ca3af;"
                     "background:#f3f4f6;"
@@ -5988,6 +6090,20 @@ def render_tab_today_session(tab):
                 key="manual_gender_mode",
                 label_visibility="collapsed",
             )
+            # ✅ 동성 세부 옵션(동성/남성/여성) — '동성'일 때만 표시
+            manual_samegender_submode = "동성복식"
+            if manual_gender_mode == "동성":
+                manual_samegender_submode = st.radio(
+                    "동성 세부 옵션",
+                    ["동성복식", "남성복식", "여성복식"],
+                    horizontal=True,
+                    index=0,
+                    key="manual_samegender_submode",
+                    label_visibility="collapsed",
+                )
+            else:
+                # 다른 모드에서는 항상 기본값으로 고정
+                st.session_state["manual_samegender_submode"] = "동성복식"
             manual_fill_ntrp = st.checkbox("NTRP 고려", key="manual_fill_ntrp")
 
             # ✅ 모바일에서도 버튼 2개를 한 줄(좌/우 반반)로 유지
@@ -6072,6 +6188,7 @@ def render_tab_today_session(tab):
                         gender_mode=gm,
                         ntrp_on=bool(manual_fill_ntrp),
                         seed_base=seed_base,
+                        same_gender_submode=("동성복식" if gm == "동성" else None),
                     )
                     plan_all.update(plan_r)
                     auto_all |= set(auto_r or [])
@@ -6170,6 +6287,7 @@ def render_tab_today_session(tab):
                         ntrp_on=bool(manual_fill_ntrp),
                         target_courts=c_list,
                         seed_base=seed_base,
+                        same_gender_submode=(manual_samegender_submode if gm == "동성" else None),
                     )
                     plan_all.update(plan_r)
                     auto_all |= set(auto_r or [])
@@ -6474,9 +6592,21 @@ def render_tab_today_session(tab):
 
         if st.session_state["edit_mode"] and schedule:
             st.markdown("### ✏️ 대진표 수정 모드")
-            st.caption("경기 1개씩 선수만 바꿀 수 있어. (한 경기 안에서 같은 사람이 중복되면 저장이 안돼)")
+            st.caption("경기 1개씩 선수만 변경하실 수 있습니다. (한 경기 안에서 같은 사람이 중복되면 저장이 되지 않습니다.)")
 
             opts_all = _available_options_for_edit()
+
+            def _opts_excluding_same_match(cur, others):
+                """같은 경기(한 expander) 안에서 이미 선택된 다른 선수는 옵션에서 제외합니다.
+                - 단, 현재 선택값(cur)은 옵션에 반드시 포함시켜 selectbox 오류를 방지합니다.
+                """
+                _others = {o for o in others if o and o != "선택"}
+                _opts = ["선택"] + [p for p in opts_all if p != "선택" and p not in _others]
+                if cur and cur != "선택" and cur not in _opts:
+                    _opts.insert(1, cur)
+                _idx = _opts.index(cur) if cur in _opts else 0
+                return _opts, _idx
+
 
             edited = []   # 최종 수정된 스케줄
 
@@ -6496,17 +6626,23 @@ def render_tab_today_session(tab):
 
                         c1, c2, c3 = st.columns([3.2, 0.9, 3.2], vertical_alignment="center")
                         with c1:
-                            a = st.selectbox("p1", opts_all, index=opts_all.index(st.session_state[k_a]) if st.session_state[k_a] in opts_all else 0, key=k_a, label_visibility="collapsed")
+                            cur_a = st.session_state.get(k_a, "선택")
+                            cur_b = st.session_state.get(k_b, "선택")
+                            _opts_a, _idx_a = _opts_excluding_same_match(cur_a, [cur_b])
+                            a = st.selectbox("p1", _opts_a, index=_idx_a, key=k_a, label_visibility="collapsed")
                         with c2:
                             st.markdown("<div style='text-align:center; font-weight:900;'>VS</div>", unsafe_allow_html=True)
                         with c3:
-                            b = st.selectbox("p2", opts_all, index=opts_all.index(st.session_state[k_b]) if st.session_state[k_b] in opts_all else 0, key=k_b, label_visibility="collapsed")
+                            cur_a = st.session_state.get(k_a, "선택")
+                            cur_b = st.session_state.get(k_b, "선택")
+                            _opts_b, _idx_b = _opts_excluding_same_match(cur_b, [cur_a])
+                            b = st.selectbox("p2", _opts_b, index=_idx_b, key=k_b, label_visibility="collapsed")
 
                         new_t1 = [a] if a != "선택" else t1
                         new_t2 = [b] if b != "선택" else t2
 
                         if not _validate_no_duplicate_in_match(gt, new_t1, new_t2):
-                            st.error("❌ 같은 경기에 같은 선수가 중복됐어. 다른 사람으로 바꿔줘.")
+                            st.error("❌ 같은 경기에서 같은 선수가 중복되었습니다. 다른 선수로 변경해 주세요.")
                         edited.append((gt, new_t1, new_t2, court))
 
                     else:
@@ -6521,21 +6657,41 @@ def render_tab_today_session(tab):
                         col1, col2, colVS, col3, col4 = st.columns([2.6, 2.6, 0.9, 2.6, 2.6], vertical_alignment="center")
 
                         with col1:
-                            p1 = st.selectbox("t1a", opts_all, index=opts_all.index(st.session_state[keys[0]]) if st.session_state[keys[0]] in opts_all else 0, key=keys[0], label_visibility="collapsed")
+                            cur1 = st.session_state.get(keys[0], "선택")
+                            cur2 = st.session_state.get(keys[1], "선택")
+                            cur3 = st.session_state.get(keys[2], "선택")
+                            cur4 = st.session_state.get(keys[3], "선택")
+                            _opts1, _idx1 = _opts_excluding_same_match(cur1, [cur2, cur3, cur4])
+                            p1 = st.selectbox("t1a", _opts1, index=_idx1, key=keys[0], label_visibility="collapsed")
                         with col2:
-                            p2 = st.selectbox("t1b", opts_all, index=opts_all.index(st.session_state[keys[1]]) if st.session_state[keys[1]] in opts_all else 0, key=keys[1], label_visibility="collapsed")
+                            cur1 = st.session_state.get(keys[0], "선택")
+                            cur2 = st.session_state.get(keys[1], "선택")
+                            cur3 = st.session_state.get(keys[2], "선택")
+                            cur4 = st.session_state.get(keys[3], "선택")
+                            _opts2, _idx2 = _opts_excluding_same_match(cur2, [cur1, cur3, cur4])
+                            p2 = st.selectbox("t1b", _opts2, index=_idx2, key=keys[1], label_visibility="collapsed")
                         with colVS:
                             st.markdown("<div style='text-align:center; font-weight:900;'>VS</div>", unsafe_allow_html=True)
                         with col3:
-                            p3 = st.selectbox("t2a", opts_all, index=opts_all.index(st.session_state[keys[2]]) if st.session_state[keys[2]] in opts_all else 0, key=keys[2], label_visibility="collapsed")
+                            cur1 = st.session_state.get(keys[0], "선택")
+                            cur2 = st.session_state.get(keys[1], "선택")
+                            cur3 = st.session_state.get(keys[2], "선택")
+                            cur4 = st.session_state.get(keys[3], "선택")
+                            _opts3, _idx3 = _opts_excluding_same_match(cur3, [cur1, cur2, cur4])
+                            p3 = st.selectbox("t2a", _opts3, index=_idx3, key=keys[2], label_visibility="collapsed")
                         with col4:
-                            p4 = st.selectbox("t2b", opts_all, index=opts_all.index(st.session_state[keys[3]]) if st.session_state[keys[3]] in opts_all else 0, key=keys[3], label_visibility="collapsed")
+                            cur1 = st.session_state.get(keys[0], "선택")
+                            cur2 = st.session_state.get(keys[1], "선택")
+                            cur3 = st.session_state.get(keys[2], "선택")
+                            cur4 = st.session_state.get(keys[3], "선택")
+                            _opts4, _idx4 = _opts_excluding_same_match(cur4, [cur1, cur2, cur3])
+                            p4 = st.selectbox("t2b", _opts4, index=_idx4, key=keys[3], label_visibility="collapsed")
 
                         new_t1 = [p1, p2] if ("선택" not in (p1, p2)) else t1
                         new_t2 = [p3, p4] if ("선택" not in (p3, p4)) else t2
 
                         if not _validate_no_duplicate_in_match(gt, new_t1, new_t2):
-                            st.error("❌ 같은 경기에 같은 선수가 중복됐어. 다른 사람으로 바꿔줘.")
+                            st.error("❌ 같은 경기에서 같은 선수가 중복되었습니다. 다른 선수로 변경해 주세요.")
 
                         edited.append((gt, new_t1, new_t2, court))
 
@@ -6546,7 +6702,7 @@ def render_tab_today_session(tab):
                 apply_edit = st.button("✅ 수정 적용하기", use_container_width=True, key="apply_edit_btn")
                 st.markdown("</div>", unsafe_allow_html=True)
             with apply_col2:
-                st.caption("수정 적용을 누르면 미리보기/저장에 반영돼.")
+                st.caption("“수정 적용하기”를 누르면 미리보기/저장에 반영됩니다.")
 
             if apply_edit:
                 # 전체 스케줄에서 경기 단위 중복 검사(경기 안만)
@@ -6557,10 +6713,10 @@ def render_tab_today_session(tab):
                         break
 
                 if not ok:
-                    st.error("수정한 경기 중 중복 선수가 있어. 에러 난 경기부터 고쳐줘.")
+                    st.error("수정한 경기 중 중복 선수가 있습니다. 오류가 표시된 경기부터 수정해 주세요.")
                 else:
                     st.session_state["today_schedule"] = edited
-                    st.success("수정 내용이 반영됐어!")
+                    st.success("수정 내용이 반영되었습니다!")
                     st.session_state["edit_mode"] = False
                     safe_rerun()
 
@@ -7260,140 +7416,152 @@ with tab3:
                     st.markdown(f'<div id="{capture_id_p}__end"></div>', unsafe_allow_html=True)
 
                     # =========================================================
-                    # ✅ [개인별 보기] 이미지 저장 버튼만 (JPEG)
-                    #   - start/end 사이 DOM을 복제해서 캡처
+                    
+                                        # =========================================================
                     # =========================================================
-                    components.html(
-                        f"""
-                        <div style="display:flex; gap:12px; margin-top:14px; align-items:center;">
-                          <button id="{capture_id_p}__save"
-                            style="flex:1; padding:10px 12px; border-radius:10px; border:1px solid rgba(0,0,0,0.15);
-                                   background:white; cursor:pointer; font-weight:700;">
-                            개인별 표 이미지 저장 (JPEG)
-                          </button>
-                          <span id="{capture_id_p}__msg" style="font-size:12px; opacity:0.7;"></span>
-                        </div>
+                    # ✅ [개인별 보기] 이미지 저장 (JPEG) - ✅ 전체 행 포함 (브라우저 캡처)
+                    #   - st.dataframe은 가상 렌더(스크롤)이라 캡처가 비거나 누락될 수 있습니다.
+                    #   - 동일 데이터를 '정적 HTML 테이블(전체 행)'로 숨김 렌더한 뒤 html2canvas로 캡처합니다.
+                    #   - matplotlib 불필요
+                    # =========================================================
 
-                        <script>
-                        (function() {{
-                          const capId = {json.dumps(capture_id_p)};
-                          const fileName = "개인별표_" + {json.dumps(str(sel_date))}.replace(/[^0-9a-zA-Z_\\-]+/g, "_") + ".jpg";
+                    def _build_personal_score_df(per_dict: dict) -> pd.DataFrame:
+                        players_sorted = sorted(per_dict.keys())
+                        rows = []
+                        for no, name in enumerate(players_sorted, start=1):
+                            games_list = per_dict[name]
+                            rows.append({
+                                '번호': no,
+                                '이름': name,
+                                '1게임': games_list[0] if len(games_list) >= 1 else '',
+                                '2게임': games_list[1] if len(games_list) >= 2 else '',
+                                '3게임': games_list[2] if len(games_list) >= 3 else '',
+                                '4게임': games_list[3] if len(games_list) >= 4 else '',
+                            })
+                        df = pd.DataFrame(rows).set_index('번호')
+                        df.index.name = ''
+                        df.index.name = None
+                        df.columns.name = None
+                        game_cols = ['1게임', '2게임', '3게임', '4게임']
+                        def _calc_wdl(row):
+                            w = d = l = 0
+                            for v in row:
+                                if not isinstance(v, str):
+                                    continue
+                                s = v.replace(' ', '')
+                                if ':' not in s:
+                                    continue
+                                a, b = s.split(':', 1)
+                                try:
+                                    a = int(a); b = int(b)
+                                except Exception:
+                                    continue
+                                if a > b: w += 1
+                                elif a == b: d += 1
+                                else: l += 1
+                            return pd.Series([w, d, l], index=['승','무','패'])
+                        df[['승','무','패']] = df[game_cols].apply(_calc_wdl, axis=1)
+                        df = df[['이름','승','무','패'] + game_cols]
+                        return df
 
-                          const msgEl  = document.getElementById(capId + "__msg");
-                          const btnSave = document.getElementById(capId + "__save");
+                    def _personal_df_to_html(df: pd.DataFrame, title: str) -> str:
+                        cols = list(df.columns)
+                        html = []
+                        html.append("<div style='font-size:28px;font-weight:900;margin:0 0 14px 0;'>" + str(title) + "</div>")
+                        html.append("<table style='border-collapse:collapse; width:100%; font-size:16px;'>")
+                        html.append("<thead><tr>")
+                        html.append("<th style='border:1px solid #e5e7eb; background:#f9fafb; padding:10px 12px; text-align:center;'></th>")
+                        for c in cols:
+                            html.append("<th style='border:1px solid #e5e7eb; background:#f9fafb; padding:10px 12px; text-align:center; font-weight:800; color:#374151;'>" + str(c) + "</th>")
+                        html.append("</tr></thead>")
+                        html.append("<tbody>")
+                        for idx, row in df.iterrows():
+                            html.append("<tr>")
+                            html.append("<td style='border:1px solid #e5e7eb; padding:10px 12px; text-align:center; color:#6b7280;'>" + str(idx) + "</td>")
+                            for c in cols:
+                                v = row[c]
+                                style = "border:1px solid #e5e7eb; padding:10px 12px; text-align:center;"
+                                if c == '이름':
+                                    nm = str(v)
+                                    info = roster_by_name.get(nm, {}) or {}
+                                    g = info.get('gender')
+                                    bg = '#f3f4f6'
+                                    if g == '남': bg = '#dbeafe'
+                                    elif g == '여': bg = '#fee2e2'
+                                    style += ' background:' + bg + '; font-weight:800;'
+                                if re.match(r'^[1-9]\\d*게임$', str(c)):
+                                    s = str(v).replace(' ', '')
+                                    if ':' in s:
+                                        try:
+                                            a, b = s.split(':', 1)
+                                            a = int(a); b = int(b)
+                                            if a > b: style += ' background:#fef9c3;'
+                                            elif a < b: style += ' background:#e5e7eb;'
+                                        except Exception:
+                                            pass
+                                html.append("<td style='" + style + "'>" + str(v) + "</td>")
+                            html.append("</tr>")
+                        html.append("</tbody></table>")
+                        return ''.join(html)
 
-                          function setMsg(m) {{
-                            if (msgEl) msgEl.textContent = m;
-                          }}
+                    capture_personal_tables = []
+                    if view_mode_scores == '조별 보기 (A/B조)':
+                        if per_player_A: capture_personal_tables.append(('A조 개인별 스코어', _build_personal_score_df(per_player_A)))
+                        if per_player_B: capture_personal_tables.append(('B조 개인별 스코어', _build_personal_score_df(per_player_B)))
+                        if per_player_other: capture_personal_tables.append(('조가 섞인 경기 / 기타 개인별 스코어', _build_personal_score_df(per_player_other)))
+                    else:
+                        if per_player_all: capture_personal_tables.append(('전체 개인별 스코어', _build_personal_score_df(per_player_all)))
 
-                          function ensureHtml2Canvas() {{
-                            return new Promise((resolve, reject) => {{
-                              const p = window.parent;
-                              if (p && p.html2canvas) {{
-                                resolve(p.html2canvas);
-                                return;
-                              }}
-                              const ps = p.document.createElement("script");
-                              ps.src = "https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js";
-                              ps.onload = () => resolve(p.html2canvas);
-                              ps.onerror = reject;
-                              p.document.head.appendChild(ps);
-                            }});
-                          }}
+                    capture_img_id = f"{capture_id_p}__img"
+                    safe_name = '개인별표_' + str(sel_date).replace('/', '_').replace(' ', '_') + '.jpg'
+                    if capture_personal_tables:
+                        _tables_html = ''.join([_personal_df_to_html(df, title) + "<div style='height:26px;'></div>" for (title, df) in capture_personal_tables])
+                        st.markdown("<div id='" + capture_img_id + "__body' style='position:fixed; left:-99999px; top:0; background:#ffffff; padding:24px; width:1200px;'>" + _tables_html + "</div>", unsafe_allow_html=True)
 
-                          if (btnSave) {{
-                            btnSave.onclick = async function() {{
-                              try {{
-                                setMsg("이미지 생성중…");
-                                const pdoc = window.parent.document;
-
-                                const start = pdoc.getElementById(capId + "__start");
-                                const end   = pdoc.getElementById(capId + "__end");
-                                if (!start || !end) {{
-                                  setMsg("캡처 마커를 찾지 못했어.");
-                                  return;
-                                }}
-
-                                const startTop = start.closest('div[data-testid="stElementContainer"]')
-                                              || start.closest('div.element-container')
-                                              || start.parentElement;
-
-                                const endTop   = end.closest('div[data-testid="stElementContainer"]')
-                                              || end.closest('div.element-container')
-                                              || end.parentElement;
-
-                                let common = startTop ? startTop.parentElement : null;
-                                while (common && endTop && !common.contains(endTop)) {{
-                                  common = common.parentElement;
-                                }}
-                                if (!common) {{
-                                  setMsg("캡처 범위(공통부모) 찾기 실패");
-                                  return;
-                                }}
-
-                                const kids = Array.from(common.children);
-                                const si = kids.indexOf(startTop);
-                                const ei = kids.indexOf(endTop);
-
-                                if (si < 0 || ei < 0 || ei <= si) {{
-                                  setMsg("캡처 범위 인덱스 오류");
-                                  return;
-                                }}
-
-                                const wrapper = pdoc.createElement("div");
-                                wrapper.style.position = "fixed";
-                                wrapper.style.left = "-100000px";
-                                wrapper.style.top = "0";
-                                wrapper.style.background = "#ffffff";
-                                const PAD = 24;
-                                wrapper.style.boxSizing = "border-box";
-                                wrapper.style.width = ((common.clientWidth || 1200) + (PAD*2)) + "px";
-                                wrapper.style.padding = PAD + "px";
-                                wrapper.style.margin = "0";
-
-                                for (let i = si + 1; i < ei; i++) {{
-                                  wrapper.appendChild(kids[i].cloneNode(true));
-                                }}
-
-                                pdoc.body.appendChild(wrapper);
-
-                                const h2c = await ensureHtml2Canvas();
-                                const canvas = await h2c(wrapper, {{
-                                  backgroundColor: "#ffffff",
-                                  scale: 2,
-                                  useCORS: true
-                                }});
-
-                                wrapper.remove();
-
-                                const url = canvas.toDataURL("image/jpeg", 0.95);
-                                const a = pdoc.createElement("a");
-                                a.href = url;
-                                a.download = fileName;
-                                pdoc.body.appendChild(a);
-                                a.click();
-                                a.remove();
-
-                                setMsg("JPEG 저장 완료!");
-                              }} catch (e) {{
-                                console.log(e);
-                                setMsg("저장 실패(콘솔 확인)");
-                              }}
-                            }};
-                          }}
-                        }})();
-                        </script>
-                        """,
-                        height=80,
-                    )
-
-
-
-
-# =========================================================
-
-
-        # =========================================================
+                    _cap_html = """
+                    <div style=\"display:flex; gap:12px; margin-top:14px; align-items:center;\">
+                      <button id=\"__CAPID____save\" style=\"flex:1; padding:14px 12px; border-radius:14px; border:1px solid rgba(0,0,0,0.12); background:#5ad1b3; color:white; cursor:pointer; font-weight:900;\">개인별 표 이미지 저장 (JPEG)</button>
+                      <span id=\"__CAPID____msg\" style=\"font-size:13px; opacity:0.75;\"></span>
+                    </div>
+                    <script>
+                    (function(){
+                      const capId = "__CAPID__";
+                      const fileName = "__FILENAME__";
+                      const btn = document.getElementById(capId + "__save");
+                      const msg = document.getElementById(capId + "__msg");
+                      const setMsg = (m) => { if(msg) msg.textContent = m; };
+                      function ensureHtml2Canvas(){
+                        return new Promise((resolve,reject)=>{
+                          const p = window.parent;
+                          if(p && p.html2canvas) return resolve(p.html2canvas);
+                          const ps = p.document.createElement('script');
+                          ps.src = 'https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js';
+                          ps.onload = ()=> resolve(p.html2canvas);
+                          ps.onerror = reject;
+                          p.document.head.appendChild(ps);
+                        });
+                      }
+                      async function run(){
+                        try{
+                          setMsg('이미지 생성중…');
+                          const pdoc = window.parent.document;
+                          const body = pdoc.getElementById(capId + "__body");
+                          if(!body){ setMsg('표가 없습니다.'); return; }
+                          const h2c = await ensureHtml2Canvas();
+                          const canvas = await h2c(body, {backgroundColor:'#ffffff', scale:2});
+                          const url = canvas.toDataURL('image/jpeg', 0.95);
+                          const a = pdoc.createElement('a');
+                          a.href = url; a.download = fileName || 'table.jpg';
+                          pdoc.body.appendChild(a); a.click(); a.remove();
+                          setMsg('JPEG 저장 완료!');
+                        }catch(e){ console.error(e); setMsg('실패'); }
+                      }
+                      if(btn) btn.onclick = run;
+                    })();
+                    </script>
+                    """
+                    _cap_html = _cap_html.replace("__CAPID__", capture_img_id).replace("__FILENAME__", safe_name)
+                    components.html(_cap_html, height=90)
         # 2. 날짜별 요약 리포트 (선택 날짜 기준)
         #   - ✅ 스코어보드/옵저버(읽기 전용) 화면에서만 여기(요약표 아래) 표시
         #   - ✅ 관리자 모드에서는 아래 '전체 경기 스코어' 섹션 하단에서 1번만 표시
@@ -7551,9 +7719,29 @@ with tab3:
 
                 def render_score_inputs_block(title, game_list):
                     """title: 'A조 경기 스코어', 'B조 경기 스코어' 등
-                       if not game_list:
-                           return
-                       game_list: [(idx, gtype, t1, t2, court), ...]"""
+                    game_list: [(idx, gtype, t1, t2, court), ...]
+                    """
+                    if not game_list:
+                        return
+
+                    # ✅ 게임 헤더에 '이름,이름 VS 이름,이름' 컬러칩 표시(좌측 정렬)
+                    def _msc_chip(name: str) -> str:
+                        info = roster_by_name.get(name, {}) or {}
+                        g = info.get("gender")
+                        cls = "msc-chip-m" if g == "남" else "msc-chip-f" if g == "여" else "msc-chip-u"
+                        return f"<span class='msc-chip {cls}'>{_html.escape(str(name))}</span>"
+
+                    def _msc_team_chips(team) -> str:
+                        team = list(team) if team is not None else []
+                        parts = []
+                        for i, nm in enumerate(team):
+                            parts.append(_msc_chip(str(nm)))
+                            if i < len(team) - 1:
+                                parts.append("<span style='font-weight:900; color:#6b7280; margin:0 2px;'>,</span>")
+                        return "".join(parts)
+
+                    def _msc_match_chips(t1, t2) -> str:
+                        return _msc_team_chips(t1) + "<span class='msc-vs'>VS</span>" + _msc_team_chips(t2)
                     if not game_list:
                         return
 
@@ -7725,25 +7913,14 @@ with tab3:
                         _sep_css = "border-top:1px solid #e5e7eb;" if _show_sep else "border-top:none;"
                         _top_css = "margin-top:0.6rem; padding-top:0.4rem;" if _show_sep else "margin-top:0.25rem; padding-top:0.15rem;"
 
+                        _chips_html = _msc_match_chips(t1, t2)
                         st.markdown(
-                            f"""
-                            <div style="
-                                {_top_css}
-                                {_sep_css}
-                                margin-bottom:0.18rem;
-                            ">
-                                <span style="font-weight:600; font-size:0.96rem;">
-                                    게임 {local_no}
-                                </span>
-                                <span style="font-size:0.82rem; color:#6b7280; margin-left:6px;">
-                                    ({gtype}{', 코트 ' + str(court) if court else ''})
-                                </span>
-                            </div>
-                            """,
+                            f"<div class='msc-gamehead'>"
+                            f"<div style='font-weight:900;'>게임 {local_no} ({gtype}, 코트 {court})</div>"
+                            f"<div class='msc-chip-wrap'>{_chips_html}</div>"
+                            f"</div>",
                             unsafe_allow_html=True,
                         )
-
-
                         # 저장돼 있던 값
                         res = results.get(str(idx)) or results.get(idx) or {}
                         prev_s1 = res.get("t1", 0)
@@ -8965,6 +9142,9 @@ with tab4:
                 if vs_opponent:
                     rows = []
                     for name, r in vs_opponent.items():
+                        # ✅ 현재 등록 선수(roster)에 없는 상대/게스트는 통계에서 제외
+                        if (name not in roster_by_name) or is_guest_name(name, roster):
+                            continue
                         if r["G"] == 0:
                             continue
                         win_rate = r["W"] / r["G"] * 100
@@ -8998,6 +9178,9 @@ with tab4:
                 if with_partner:
                     rows = []
                     for name, r in with_partner.items():
+                        # ✅ 현재 등록 선수(roster)에 없는 파트너/게스트는 통계에서 제외
+                        if (name not in roster_by_name) or is_guest_name(name, roster):
+                            continue
                         if r["G"] == 0:
                             continue
                         win_rate = r["W"] / r["G"] * 100
@@ -9357,6 +9540,137 @@ with tab5:
                         df["승률"] = df["승률"].map(lambda x: f"{x:.1f}%")
                         return df
 
+
+                    # =========================================================
+                    # ✅ [월간 순위표] 표 JPG 저장 (브라우저 캡처 - 전체 행 포함)
+                    #   - st.dataframe은 가상 렌더(스크롤)로 DOM에 전체 행이 없어서 캡처가 비거나 누락될 수 있음
+                    #   - 그래서 '전체 행이 들어간 정적 HTML 표'를 숨겨서 렌더한 뒤, html2canvas로 그 DOM을 캡처해 JPG로 저장
+                    #   - (matplotlib 불필요)
+                    # =========================================================
+                    def _month_rank_static_table_html(_df: pd.DataFrame, _title: str) -> str:
+                        df_img = _df.copy()
+                        df_img.insert(0, "순위", df_img.index.astype(int))
+
+                        cols = list(df_img.columns)
+
+                        def td_style_for(col_name: str, value: str) -> str:
+                            # 이름 컬러칩(셀 배경)
+                            if col_name == "이름":
+                                info = roster_by_name.get(value, {}) or {}
+                                g = info.get("gender")
+                                if g == "남":
+                                    return "background:#dbeafe; font-weight:800; color:#111827;"
+                                if g == "여":
+                                    return "background:#fee2e2; font-weight:800; color:#111827;"
+                                return "background:#f3f4f6; font-weight:800; color:#111827;"
+                            return ""
+
+                        # 테이블 HTML (전체 행 포함)
+                        parts = []
+                        parts.append("<div style='font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; background:#ffffff;'>")
+                        parts.append(f"<div style='font-size:22px; font-weight:900; margin:0 0 14px 0; color:#111827;'>{_html.escape(str(_title))}</div>")
+                        parts.append("<table style='border-collapse:collapse; width:100%; font-size:14px;'>")
+                        # header
+                        parts.append("<thead><tr>")
+                        for c in cols:
+                            parts.append(
+                                f"<th style='border:1px solid #e5e7eb; padding:8px 10px; background:#f9fafb; color:#374151; font-weight:800; text-align:center;'>{_html.escape(str(c))}</th>"
+                            )
+                        parts.append("</tr></thead>")
+                        # body
+                        parts.append("<tbody>")
+                        for _, row in df_img.iterrows():
+                            parts.append("<tr>")
+                            for c in cols:
+                                v = row[c]
+                                v_str = "" if pd.isna(v) else str(v)
+                                style = td_style_for(c, v_str)
+                                parts.append(
+                                    f"<td style='border:1px solid #e5e7eb; padding:8px 10px; text-align:center; {style}'>{_html.escape(v_str)}</td>"
+                                )
+                            parts.append("</tr>")
+                        parts.append("</tbody></table></div>")
+                        return "".join(parts)
+
+                    def _render_month_rank_jpg_button(_cap_id: str, _file_name: str, _btn_label: str = "순위표 JPG 저장하기"):
+                        # 버튼 1개: 클릭 시 숨겨진 표 DOM을 캡처해서 JPG로 다운로드
+                        components.html(
+                            f"""
+                            <div style="display:flex; gap:10px; margin-top:12px; align-items:center;">
+                              <button id="{_cap_id}__save"
+                                style="flex:1; padding:12px 12px; border-radius:12px; border:1px solid rgba(0,0,0,0.15);
+                                       background:white; cursor:pointer; font-weight:800;">
+                                {_btn_label}
+                              </button>
+                              <span id="{_cap_id}__msg" style="font-size:12px; opacity:0.7;"></span>
+                            </div>
+
+                            <script>
+                            (function() {{
+                              const capId = {json.dumps(_cap_id)};
+                              const fileName = {json.dumps(_file_name)};
+                              const msgEl  = document.getElementById(capId + "__msg");
+                              const btnSave = document.getElementById(capId + "__save");
+
+                              function setMsg(m) {{
+                                if (msgEl) msgEl.textContent = m;
+                              }}
+
+                              function ensureHtml2Canvas() {{
+                                return new Promise((resolve, reject) => {{
+                                  const p = window.parent;
+                                  if (p && p.html2canvas) {{
+                                    resolve(p.html2canvas);
+                                    return;
+                                  }}
+                                  const ps = p.document.createElement("script");
+                                  ps.src = "https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js";
+                                  ps.onload = () => resolve(p.html2canvas);
+                                  ps.onerror = reject;
+                                  p.document.head.appendChild(ps);
+                                }});
+                              }}
+
+                              if (btnSave) {{
+                                btnSave.onclick = async function() {{
+                                  try {{
+                                    setMsg("이미지 생성중…");
+                                    const pdoc = window.parent.document;
+                                    const el = pdoc.getElementById(capId + "__content");
+                                    if (!el) {{
+                                      setMsg("캡처 대상을 찾지 못했어.");
+                                      return;
+                                    }}
+
+                                    const h2c = await ensureHtml2Canvas();
+                                    const canvas = await h2c(el, {{
+                                      backgroundColor: "#ffffff",
+                                      scale: 2,
+                                      useCORS: true
+                                    }});
+
+                                    const url = canvas.toDataURL("image/jpeg", 0.95);
+                                    const a = pdoc.createElement("a");
+                                    a.href = url;
+                                    a.download = fileName;
+                                    pdoc.body.appendChild(a);
+                                    a.click();
+                                    a.remove();
+
+                                    setMsg("JPG 저장 완료!");
+                                  }} catch (e) {{
+                                    console.log(e);
+                                    setMsg("저장 실패(콘솔 확인)");
+                                  }}
+                                }};
+                              }}
+                            }})();
+                            </script>
+                            """,
+                            height=72,
+                        )
+
+
                     # ---------------------------------------------------------
                     # 1-3) 순위표 출력
                     # ---------------------------------------------------------
@@ -9368,6 +9682,17 @@ with tab5:
                             sty_rank = colorize_df_names(rank_df, roster_by_name, ["이름"])
                             smart_table(sty_rank, use_container_width=True)
 
+                            # ✅ 순위표 JPG 저장(전체) - 전체 행 포함 정적 HTML 캡처
+                            _safe_month = re.sub(r"[^0-9a-zA-Z_\-]+", "_", str(sel_month))
+                            _cap_id = f"month_rank_all_{_safe_month}"
+                            _title = f"{sel_month} 월간 선수 순위표 (전체)"
+                            _tbl_html = _month_rank_static_table_html(rank_df, _title)
+                            st.markdown(
+                                f'<div id="{_cap_id}__content" style="position:fixed; left:-100000px; top:0; width:1200px; padding:24px; background:#ffffff; box-sizing:border-box;">{_tbl_html}</div>',
+                                unsafe_allow_html=True,
+                            )
+                            _fname = f"월간순위표_{sel_month}_전체.jpg".replace("/", "_").replace(" ", "_")
+                            _render_month_rank_jpg_button(_cap_id, _fname, "전체 순위표 JPG 저장하기")
                     else:
                         # ✅ 조별보기: 집계는 동일(recs_all), 선수만 A/B로 나누기
                         names_A = sorted([n for n, g in player_month_group.items() if g == "A"])
@@ -9383,12 +9708,34 @@ with tab5:
                             sty_A = colorize_df_names(rank_df_A, roster_by_name, ["이름"])
                             smart_table(sty_A, use_container_width=True)
 
+                            # ✅ 순위표 JPG 저장(A조) - 전체 행 포함 정적 HTML 캡처
+                            _safe_month = re.sub(r"[^0-9a-zA-Z_\-]+", "_", str(sel_month))
+                            _cap_id = f"month_rank_A_{_safe_month}"
+                            _title = f"{sel_month} 월간 선수 순위표 (A조)"
+                            _tbl_html = _month_rank_static_table_html(rank_df_A, _title)
+                            st.markdown(
+                                f'<div id="{_cap_id}__content" style="position:fixed; left:-100000px; top:0; width:1200px; padding:24px; background:#ffffff; box-sizing:border-box;">{_tbl_html}</div>',
+                                unsafe_allow_html=True,
+                            )
+                            _fname = f"월간순위표_{sel_month}_A조.jpg".replace("/", "_").replace(" ", "_")
+                            _render_month_rank_jpg_button(_cap_id, _fname, "A조 순위표 JPG 저장하기")
                         if rank_df_B is not None:
                             has_any = True
                             st.markdown("### 🟦 B조 월간 선수 순위표")
                             sty_B = colorize_df_names(rank_df_B, roster_by_name, ["이름"])
                             smart_table(sty_B, use_container_width=True)
 
+                            # ✅ 순위표 JPG 저장(B조) - 전체 행 포함 정적 HTML 캡처
+                            _safe_month = re.sub(r"[^0-9a-zA-Z_\-]+", "_", str(sel_month))
+                            _cap_id = f"month_rank_B_{_safe_month}"
+                            _title = f"{sel_month} 월간 선수 순위표 (B조)"
+                            _tbl_html = _month_rank_static_table_html(rank_df_B, _title)
+                            st.markdown(
+                                f'<div id="{_cap_id}__content" style="position:fixed; left:-100000px; top:0; width:1200px; padding:24px; background:#ffffff; box-sizing:border-box;">{_tbl_html}</div>',
+                                unsafe_allow_html=True,
+                            )
+                            _fname = f"월간순위표_{sel_month}_B조.jpg".replace("/", "_").replace(" ", "_")
+                            _render_month_rank_jpg_button(_cap_id, _fname, "B조 순위표 JPG 저장하기")
                         if not has_any:
                             st.info("A조 / B조로 나눠서 표시할 데이터가 없습니다.")
 
@@ -9747,8 +10094,6 @@ with tab5:
 # ✅ 모든 탭 공통 푸터
 # =========================================================
 render_footer()
-
-
 
 
 
