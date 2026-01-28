@@ -36,8 +36,8 @@ from PIL import Image
 # =========================================================
 
 # 기본(폴백) 클럽
-DEFAULT_CLUB_CODE = (os.getenv("TNNT_DEFAULT_CLUB_CODE", "MSPC") or "MSPC").strip()
-DEFAULT_CLUB_NAME = (os.getenv("TNNT_DEFAULT_CLUB_NAME", "마리아상암포바") or "마리아상암포바").strip()
+DEFAULT_CLUB_CODE = (os.getenv("TNNT_DEFAULT_CLUB_CODE", "HMMC") or "HMMC").strip()
+DEFAULT_CLUB_NAME = (os.getenv("TNNT_DEFAULT_CLUB_NAME", "HANMIMOS") or "HANMIMOS").strip()
 
 # ✅ 관리자(메인) 앱 타이틀(표시용)
 ADMIN_PURPOSE = "관리 도우미"  # 예: "도우미 (Beta)"
