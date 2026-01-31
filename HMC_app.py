@@ -7040,6 +7040,46 @@ def render_tab_today_session(tab):
 
                 return rng.choice(best)
 
+            def _fair_pick_japbok(
+                cands,
+                counts: Counter,
+                japbok_counter: Counter,
+                rng: random.Random,
+                ref_ntrp=None,
+                ntrp_on: bool = False,
+            ):
+                """✅ 잡복(남1여3 / 여1남3) 슬롯에 들어가는 사람 중복 최소화 픽.
+
+                - 1차: (최대 1게임 차) 공평성 규칙(_fair_pick의 eligible) 유지
+                - 2차: japbok_counter(잡복 참여 횟수) 최소인 사람 우선
+                - 3차: _fair_pick 로직(게임수 최소 / NTRP 근접) 재사용
+                """
+                cands = [c for c in (cands or []) if c is not None]
+                if not cands:
+                    return None
+
+                # _fair_pick의 eligible(최대 1게임 차) 필터를 동일하게 적용
+                try:
+                    cur_min = min(counts.values()) if counts else 0
+                except Exception:
+                    cur_min = 0
+
+                eligible = [p for p in cands if counts.get(p, 0) <= cur_min + 1]
+                if not eligible:
+                    return None
+
+                try:
+                    min_j = min(int(japbok_counter.get(p, 0)) for p in eligible)
+                except Exception:
+                    min_j = 0
+
+                best = [p for p in eligible if int(japbok_counter.get(p, 0)) == min_j]
+                if not best:
+                    best = eligible
+
+                # 남은 것은 _fair_pick에 위임(게임수 최소/NTRP)
+                return _fair_pick(best, counts, rng, ref_ntrp=ref_ntrp, ntrp_on=ntrp_on)
+
             def _fill_manual_fair(target_by_round: dict | None, seed_base: int):
                 """수동 배정 자동 채우기(공평성 + 코트별 타입).
 
@@ -7105,11 +7145,149 @@ def render_tab_today_session(tab):
                     used_by_round = {rr: set(vs) for rr, vs in used_by_round_base.items()}
                     plan = {}
                     auto_keys = set()
+                    # ✅ 잡복(남1여3 / 여1남3) 참여 횟수(이번 시도 내에서만) — 중복 최소화
+                    japbok_counter = Counter()
 
                     ok = True
 
                     for rr in range(1, int(total_rounds) + 1):
                         used = used_by_round[int(rr)]
+
+                        # -------------------------------------------------
+                        # ✅ 혼합복식인데 성비가 2:2로 안 맞을 때(=잡복 필요)
+                        #    같은 사람(예: 특정 남자)만 계속 잡복에 끼지 않도록
+                        #    라운드 단위로 '잡복 담당자'를 예약해서 분산
+                        # -------------------------------------------------
+                        solo_def_gender = None           # '남' or '여'
+                        solo_courts = set()              # 잡복이 허용되는 코트들(해당 성별 1명만)
+                        solo_reserve_by_court = {}       # {cc: reserved_player}
+                        solo_reserved_players = set()    # 다른 코트에서 뽑히지 않도록 차단
+
+                        if gtype == "복식":
+                            mixed_courts = []
+                            pool_by_court = {}
+                            fixed_gender_cnt = {}  # {cc: (fixed_m, fixed_f)}  (keep 슬롯만)
+                            fixed_keep_vals = {}  # {cc: [v1,v2,v3,v4]}  (keep 슬롯만)
+
+                            # 이 라운드에서 혼합복식인 코트들 수집
+                            for cc2 in range(1, int(court_count) + 1):
+                                if not _is_target(rr, cc2):
+                                    continue
+                                mode2 = _desired_mode_for_game(rr, cc2, court_count)
+                                if mode2 != "혼합복식":
+                                    continue
+
+                                grp2 = _court_group_tag(view_mode_for_schedule, cc2)
+                                pool2 = _pool_by_group(players_selected, grp2)
+                                pool_by_court[int(cc2)] = pool2
+                                mixed_courts.append(int(cc2))
+
+                                ks2 = [_manual_key(rr, cc2, i, gtype) for i in (1, 2, 3, 4)]
+                                vs2 = [_get_manual_value(k) for k in ks2]
+                                keep2 = [(v != "선택" and (not _is_auto_slot(k))) for k, v in zip(ks2, vs2)]
+                                eff2 = [v if kk else "선택" for v, kk in zip(vs2, keep2)]
+                                fm = sum(1 for v in eff2 if v != "선택" and _gender_of(v) == "남")
+                                ff = sum(1 for v in eff2 if v != "선택" and _gender_of(v) == "여")
+                                fixed_gender_cnt[int(cc2)] = (fm, ff)
+                                fixed_keep_vals[int(cc2)] = list(eff2)
+
+                            if mixed_courts:
+                                pool_union = set()
+                                for cc2 in mixed_courts:
+                                    pool_union.update(pool_by_court.get(int(cc2), []) or [])
+
+                                men_free = [p for p in pool_union if (p not in used) and (_gender_of(p) == "남")]
+                                women_free = [p for p in pool_union if (p not in used) and (_gender_of(p) == "여")]
+                                men_fixed = [p for p in used if (p in pool_union) and (_gender_of(p) == "남")]
+                                women_fixed = [p for p in used if (p in pool_union) and (_gender_of(p) == "여")]
+
+                                total_m = len(men_free) + len(men_fixed)
+                                total_f = len(women_free) + len(women_fixed)
+                                ideal = 2 * len(mixed_courts)
+                                deficit_m = max(0, ideal - total_m)
+                                deficit_f = max(0, ideal - total_f)
+
+                                # 둘 다 부족할 수 있지만, 일반적으로 한쪽만 부족(예: 남3 여5)
+                                if deficit_m or deficit_f:
+                                    if deficit_m >= deficit_f:
+                                        solo_def_gender = "남"
+                                        solo_k = deficit_m
+                                        free_list = list(men_free)
+                                    else:
+                                        solo_def_gender = "여"
+                                        solo_k = deficit_f
+                                        free_list = list(women_free)
+
+                                    # 잡복 코트 선택:
+                                    #  - 기본은 (이미 부족 성별 1명 고정)인 코트를 우선(추가 슬롯 없이 잡복 성립)
+                                    #  - 단, 고정된 사람이 이미 잡복을 많이 했다면(중복) 다른 코트를 먼저 쓰도록 가중치
+                                    cand = []
+                                    for cc2 in mixed_courts:
+                                        fm, ff = fixed_gender_cnt.get(int(cc2), (0, 0))
+                                        fixed_def = fm if solo_def_gender == "남" else ff
+                                        if fixed_def >= 2:
+                                            continue
+
+                                        pref = 0 if fixed_def == 1 else 1
+
+                                        # fixed_def==1인 코트는 '이미 고정된 솔로 후보'의 잡복 참여 횟수를 참고
+                                        jpref = 0
+                                        if fixed_def == 1:
+                                            eff_keep = fixed_keep_vals.get(int(cc2), []) or []
+                                            fixed_players = [
+                                                v for v in eff_keep
+                                                if v != "선택" and _gender_of(v) == solo_def_gender
+                                            ]
+                                            if fixed_players:
+                                                jpref = int(japbok_counter.get(fixed_players[0], 0))
+
+                                        cand.append((pref, jpref, rng.random(), int(cc2)))
+                                    cand.sort()
+
+                                    solo_courts = set([cc for _p, _j, _r, cc in cand[: int(solo_k)]])
+
+                                    # ✅ 잡복(남1여3 / 여1남3) 코트마다 '솔로(부족 성별 1명)'를 미리 지정해서 분산
+                                    #   - 해당 코트에 부족 성별이 이미 1명(수동 고정) 있으면 그 사람을 솔로로 고정
+                                    #   - 없으면 free_list에서 _fair_pick_japbok로 뽑아서 솔로로 예약
+                                    for cc2 in list(solo_courts):
+                                        fm, ff = fixed_gender_cnt.get(int(cc2), (0, 0))
+                                        fixed_def = fm if solo_def_gender == "남" else ff
+                                        if fixed_def >= 2:
+                                            continue
+
+                                        # (A) 이미 수동 고정으로 부족 성별이 1명 들어가 있으면 그 사람을 솔로로 지정
+                                        if fixed_def == 1:
+                                            eff_keep = fixed_keep_vals.get(int(cc2), []) or []
+                                            fixed_players = [
+                                                v for v in eff_keep
+                                                if v != "선택" and _gender_of(v) == solo_def_gender
+                                            ]
+                                            if fixed_players:
+                                                solo_reserve_by_court[int(cc2)] = fixed_players[0]
+                                                solo_reserved_players.add(fixed_players[0])
+                                            continue
+
+                                        # (B) 없으면: 이번 라운드 솔로 담당자를 공평 + 중복 최소로 선발
+                                        pick = _fair_pick_japbok(
+                                            free_list,
+                                            counts,
+                                            japbok_counter,
+                                            rng,
+                                            ntrp_on=bool(manual_fill_ntrp),
+                                        )
+                                        if pick is None:
+                                            ok = False
+                                            break
+
+                                        solo_reserve_by_court[int(cc2)] = pick
+                                        solo_reserved_players.add(pick)
+                                        try:
+                                            free_list.remove(pick)
+                                        except Exception:
+                                            pass
+
+                                    if not ok:
+                                        break
 
                         # 라운드 내: 코트별로 채우되, 타입은 게임별 선택을 따름
                         for cc in range(1, int(court_count) + 1):
@@ -7212,32 +7390,128 @@ def render_tab_today_session(tab):
                                 return True
 
                             if mode == "혼합복식":
-                                # 팀(0,1) / (2,3)이 무조건 남+여 / 남+여가 되도록
-                                for kk in empty_keys:
+                                # ✅ 기본은 남+여 / 남+여를 최대한 유지
+                                # ✅ 단, 성비가 2:2로 안 맞아서 잡복(남1여3/여1남3)이 필요한 라운드에서는
+                                #    특정 1명만 계속 잡복에 끼지 않도록(예: 박진균만 계속) 라운드 단위로 예약/분산
+
+                                is_solo_court = bool(solo_def_gender) and (int(cc) in set(solo_courts))
+                                blocked = set()
+                                if (not is_solo_court) and solo_reserved_players:
+                                    blocked = set(solo_reserved_players)
+
+                                # 잡복 코트이면, 예약된 사람을 우선 배치(해당 성별이 0명인 경우)
+                                if is_solo_court:
+                                    def_g = solo_def_gender  # '남' or '여'
+                                    cur_def_cnt = sum(1 for v in eff_tmp if v != "선택" and _gender_of(v) == def_g)
+                                    res = solo_reserve_by_court.get(int(cc))
+                                    if res and (res not in eff_tmp):
+                                        pref_positions = [0, 2, 1, 3] if def_g == "남" else [1, 3, 0, 2]
+
+                                        def _rank_key(kx):
+                                            ii = pos_map.get(kx, 99)
+                                            try:
+                                                return pref_positions.index(ii)
+                                            except Exception:
+                                                return 99
+
+                                        kk0 = min(list(empty_keys), key=_rank_key)
+                                        i0 = pos_map.get(kk0, None)
+                                        if i0 is None:
+                                            ok = False
+                                            break
+                                        if not _take(res):
+                                            ok = False
+                                            break
+                                        plan[kk0] = res
+                                        auto_keys.add(kk0)
+                                        eff_tmp[i0] = res
+                                        try:
+                                            empty_keys.remove(kk0)
+                                        except Exception:
+                                            pass
+                                        if res in men:
+                                            men.remove(res)
+                                        if res in women:
+                                            women.remove(res)
+
+                                # 비-잡복 코트에서는 예약된 사람을 다른 코트에서 뽑지 않게 차단
+                                if blocked:
+                                    men = [p for p in men if p not in blocked]
+                                    women = [p for p in women if p not in blocked]
+
+                                # 팀(0,1) / (2,3) 기준으로 순차 채우기
+                                for kk in list(empty_keys):
                                     i = pos_map.get(kk, None)
                                     if i is None:
-                                        ok = False; break
+                                        ok = False
+                                        break
 
                                     mate_i = (i - 1) if (i % 2 == 1) else (i + 1)
                                     mate = eff_tmp[mate_i] if 0 <= mate_i < 4 else "선택"
 
+                                    # 잡복 코트에서는 (def_g) 성별이 이미 1명 확보되면 추가로 뽑지 않음
+                                    if is_solo_court and solo_def_gender:
+                                        def_g = solo_def_gender
+                                        cur_def_cnt = sum(1 for v in eff_tmp if v != "선택" and _gender_of(v) == def_g)
+                                        if cur_def_cnt >= 1:
+                                            if def_g == "남":
+                                                men = []
+                                            else:
+                                                women = []
+
                                     if mate != "선택":
                                         need_g = "여" if _gender_of(mate) == "남" else "남"
                                         cand = men if need_g == "남" else women
-                                        pick = _fair_pick(cand, counts, rng, ref_ntrp=_ntrp_of(mate), ntrp_on=bool(manual_fill_ntrp))
+                                        pick = _fair_pick(
+                                            cand,
+                                            counts,
+                                            rng,
+                                            ref_ntrp=_ntrp_of(mate),
+                                            ntrp_on=bool(manual_fill_ntrp),
+                                        )
                                         if pick is None:
-                                            pick = _fair_pick(men + women, counts, rng, ref_ntrp=_ntrp_of(mate), ntrp_on=bool(manual_fill_ntrp))
+                                            rest_pool = men + women
+                                            if blocked:
+                                                rest_pool = [p for p in rest_pool if p not in blocked]
+                                            pick = _fair_pick(
+                                                rest_pool,
+                                                counts,
+                                                rng,
+                                                ref_ntrp=_ntrp_of(mate),
+                                                ntrp_on=bool(manual_fill_ntrp),
+                                            )
                                     else:
+                                        # 기본은 (0,2)=남 / (1,3)=여
                                         prefer_g = "남" if i in (0, 2) else "여"
+
+                                        # 잡복 코트에서는 부족 성별(def_g)을 과하게 더 뽑지 않도록 반대로 우선
+                                        if is_solo_court and solo_def_gender:
+                                            def_g = solo_def_gender
+                                            cur_def_cnt = sum(1 for v in eff_tmp if v != "선택" and _gender_of(v) == def_g)
+                                            if cur_def_cnt >= 1 and prefer_g == def_g:
+                                                prefer_g = "여" if def_g == "남" else "남"
+
                                         primary = men if prefer_g == "남" else women
                                         secondary = women if prefer_g == "남" else men
-                                        pick = _fair_pick(primary, counts, rng, ntrp_on=bool(manual_fill_ntrp))                                             or _fair_pick(secondary, counts, rng, ntrp_on=bool(manual_fill_ntrp))                                             or _fair_pick(men + women, counts, rng, ntrp_on=bool(manual_fill_ntrp))
+                                        rest_pool = men + women
+                                        if blocked:
+                                            primary = [p for p in primary if p not in blocked]
+                                            secondary = [p for p in secondary if p not in blocked]
+                                            rest_pool = [p for p in rest_pool if p not in blocked]
+
+                                        pick = (
+                                            _fair_pick(primary, counts, rng, ntrp_on=bool(manual_fill_ntrp))
+                                            or _fair_pick(secondary, counts, rng, ntrp_on=bool(manual_fill_ntrp))
+                                            or _fair_pick(rest_pool, counts, rng, ntrp_on=bool(manual_fill_ntrp))
+                                        )
 
                                     if pick is None:
-                                        ok = False; break
+                                        ok = False
+                                        break
 
                                     if not _take(pick):
-                                        ok = False; break
+                                        ok = False
+                                        break
 
                                     plan[kk] = pick
                                     auto_keys.add(kk)
@@ -7250,6 +7524,13 @@ def render_tab_today_session(tab):
 
                                 if not ok:
                                     break
+
+                                # ✅ 잡복 코트면 해당 성별 1명인 선수를 기록(라운드별로 최대 중복 방지)
+                                if is_solo_court and solo_def_gender:
+                                    def_g = solo_def_gender
+                                    solo_players = [v for v in eff_tmp if v != "선택" and _gender_of(v) == def_g]
+                                    if len(solo_players) == 1:
+                                        japbok_counter[solo_players[0]] += 1
 
                             else:
                                 # 동성/남성/여성/랜덤
@@ -10006,7 +10287,7 @@ with tab3:
                         #     - 결과(results)도 함께 교환
                         # -----------------------------
                         with col_reorder:
-                            with st.expander("🔀 게임 순서 변경", expanded=False):
+                            with st.expander("🔀 게임 순서 변경 및 삭제", expanded=False):
                                 n_games = len(_sched_now)
 
                                 def _team_join(team):
@@ -10097,6 +10378,258 @@ with tab3:
 
                                             st.session_state["_flash_day_edit_msg"] = "✅ 게임 순서 교환 완료! (점수도 교환됐는지 확인 바람)"
                                             safe_rerun()
+                                # -----------------------------
+                                                                # -----------------------------
+                                # (C) 게임 삭제 (게임별)
+                                #   - '게임(라운드)'을 먼저 고르고, 그 다음 코트를 고른 뒤 삭제
+                                #   - 선택한 1게임(라운드+코트) 삭제 / 선택한 코트의 게임 전체 삭제
+                                #   - schedule + results를 함께 정리하고, 위젯 키도 초기화
+                                # -----------------------------
+                                st.markdown("---")
+                                st.markdown("#### 🗑 게임 삭제 (게임별)")
+
+                                # ✅ 잠금(점수 잠금) 상태면 삭제 불가
+                                _locked_day = sessions.get(sel_date, {}).get("scores_locked", False)
+
+                                def _court_to_int(_c):
+                                    try:
+                                        return int(str(_c).strip())
+                                    except Exception:
+                                        try:
+                                            s = "" if _c is None else str(_c)
+                                            digits = "".join([ch for ch in s if ch.isdigit()])
+                                            return int(digits) if digits else None
+                                        except Exception:
+                                            return None
+
+                                def _team_join_one(team):
+                                    if isinstance(team, (list, tuple)):
+                                        return " / ".join([str(x) for x in team if str(x).strip() != ""])
+                                    return str(team) if team is not None else ""
+
+                                # 현재 스케줄에서 '한 라운드의 코트 수' 추정: 코트 번호 최대값을 기본으로 사용
+                                _court_ints = [_court_to_int(c) for (_, _, _, c) in _sched_now]
+                                _court_ints = [x for x in _court_ints if isinstance(x, int) and x > 0]
+                                _court_set = sorted(set(_court_ints))
+                                _round_court_count = len(_court_set) if _court_set else 1
+
+                                n_games_local = len(_sched_now)
+                                if n_games_local <= 0:
+                                    st.info("삭제할 게임이 없습니다.")
+                                else:
+                                    n_rounds = int(math.ceil(n_games_local / float(_round_court_count))) if _round_court_count else 1
+                                    round_opts = list(range(1, n_rounds + 1))
+
+                                    del_round = st.selectbox(
+                                        "삭제할 게임",
+                                        round_opts,
+                                        format_func=lambda r: f"게임 {r}",
+                                        key=f"del_round_{sel_date}",
+                                        disabled=_locked_day,
+                                    )
+
+                                    # 선택 라운드에 해당하는 (전체 스케줄 기준) 1-based 인덱스 목록
+                                    s0 = (int(del_round) - 1) * int(_round_court_count)
+                                    e0 = min(int(del_round) * int(_round_court_count), n_games_local)
+                                    round_idxs = list(range(s0 + 1, e0 + 1))
+
+                                    # 라운드 내 존재하는 코트 목록(정렬)
+                                    round_courts = []
+                                    for i in round_idxs:
+                                        try:
+                                            c = _sched_now[i - 1][3]
+                                        except Exception:
+                                            c = None
+                                        ci = _court_to_int(c)
+                                        if ci is None:
+                                            continue
+                                        round_courts.append(ci)
+
+                                    round_courts = sorted(set(round_courts))
+                                    if not round_courts:
+                                        st.info("선택한 게임(라운드)에 삭제할 코트가 없습니다.")
+                                    else:
+                                        del_court = st.selectbox(
+                                            "삭제할 코트",
+                                            round_courts,
+                                            key=f"del_court_{sel_date}_{del_round}",
+                                            disabled=_locked_day,
+                                        )
+
+                                        # ✅ 라벨(전체 스케줄 기준)
+                                        labels_all = []
+                                        for _i, (_gt, _t1, _t2, _ct) in enumerate(_sched_now, start=1):
+                                            labels_all.append(f"{_i}번 ({_gt}, 코트 {_ct})  {_team_join_one(_t1)} vs {_team_join_one(_t2)}")
+
+                                        # 선택 라운드+코트에 해당하는 실제 게임 인덱스(1-based)
+                                        idxs_one = []
+                                        for i in round_idxs:
+                                            _ct = _sched_now[i - 1][3]
+                                            if _court_to_int(_ct) == int(del_court):
+                                                idxs_one.append(int(i))
+
+                                        if not idxs_one:
+                                            st.info("선택한 게임/코트에 삭제할 경기가 없습니다.")
+                                        else:
+                                            # 일반적으로 1개지만, 혹시 중복이 있으면 첫 번째를 기본으로
+                                            target_idx_one = int(idxs_one[0])
+                                            st.caption(f"선택됨: {labels_all[target_idx_one - 1] if 0 <= target_idx_one - 1 < len(labels_all) else f'{target_idx_one}번'}")
+
+                                            col_d1, col_d2 = st.columns(2)
+                                            with col_d1:
+                                                st.markdown('<div class="main-danger-btn">', unsafe_allow_html=True)
+                                                req_del_one = st.button(
+                                                    "🗑 선택 게임 삭제",
+                                                    use_container_width=True,
+                                                    key=f"del_one_btn_{sel_date}",
+                                                    disabled=_locked_day,
+                                                )
+                                                st.markdown("</div>", unsafe_allow_html=True)
+
+                                            with col_d2:
+                                                st.markdown('<div class="main-danger-btn">', unsafe_allow_html=True)
+                                                req_del_roundall = st.button(
+                                                    "🗑 이 게임번호 전체 삭제",
+                                                    use_container_width=True,
+                                                    key=f"del_roundall_btn_{sel_date}",
+                                                    disabled=_locked_day,
+                                                )
+                                                st.markdown("</div>", unsafe_allow_html=True)
+
+                                            if _locked_day:
+                                                st.caption("※ 점수 잠금 상태에서는 삭제할 수 없습니다. (잠금을 해제한 뒤 진행하세요.)")
+
+                                            # 삭제 요청 저장(확인 UI용)
+                                            if req_del_one:
+                                                st.session_state["_pending_delete_game"] = {
+                                                    "date": sel_date,
+                                                    "mode": "single",
+                                                    "idxs": [int(target_idx_one)],
+                                                    "round": int(del_round),
+                                                    "court": int(del_court),
+                                                }
+                                            if req_del_roundall:
+                                                # ✅ 게임번호(라운드) 전체 삭제: 선택된 게임 번호에 포함된 코트(들) 전체를 삭제
+                                                st.session_state["_pending_delete_game"] = {
+                                                    "date": sel_date,
+                                                    "mode": "round",
+                                                    "idxs": [int(x) for x in round_idxs],
+                                                    "round": int(del_round),
+                                                    "court": None,
+                                                }
+
+                                            pending_del = st.session_state.get("_pending_delete_game")
+                                            if pending_del and pending_del.get("date") == sel_date:
+                                                _mode = pending_del.get("mode")
+                                                _court = pending_del.get("court")
+                                                _round = pending_del.get("round")
+                                                _idxs2 = pending_del.get("idxs") or []
+                                                _idxs2 = [int(x) for x in _idxs2 if isinstance(x, (int, str)) and str(x).isdigit()]
+
+                                                msg = (
+                                                    f"게임 {_round} · 코트 {_court} (전체 {_idxs2[0] if _idxs2 else '?'}번)를 삭제할까요?"
+                                                    if _mode == "single"
+                                                    else (
+                                                        f"게임 {_round}의 경기 {len(_idxs2)}개(코트 전체)를 모두 삭제할까요?"
+                                                        if _mode == "round"
+                                                        else f"코트 {_court}의 게임 {len(_idxs2)}개를 모두 삭제할까요?"
+                                                    )
+                                                )
+                                                st.warning(msg)
+
+                                                col_ok2, col_cancel2 = st.columns(2)
+                                                with col_ok2:
+                                                    st.markdown('<div class="main-danger-btn">', unsafe_allow_html=True)
+                                                    yes_del = st.button(
+                                                        "네, 삭제합니다",
+                                                        use_container_width=True,
+                                                        key=f"del_yes_{sel_date}",
+                                                        disabled=_locked_day,
+                                                    )
+                                                    st.markdown("</div>", unsafe_allow_html=True)
+
+                                                with col_cancel2:
+                                                    st.markdown('<div class="main-secondary-btn">', unsafe_allow_html=True)
+                                                    no_del = st.button(
+                                                        "취소",
+                                                        use_container_width=True,
+                                                        key=f"del_cancel_{sel_date}",
+                                                    )
+                                                    st.markdown("</div>", unsafe_allow_html=True)
+
+                                                if no_del:
+                                                    st.session_state["_pending_delete_game"] = None
+                                                    st.info("삭제를 취소했습니다.")
+
+                                                if yes_del and (not _locked_day):
+                                                    # ✅ 안전망: 혹시 그 사이 잠금이 켜졌을 경우까지 방지
+                                                    if sessions.get(sel_date, {}).get("scores_locked", False):
+                                                        st.warning("잠금을 먼저 해제하세요.")
+                                                    else:
+                                                        # results를 list로 정규화
+                                                        old_results = day_data.get("results", {}) or {}
+
+                                                        def _get_result_by_index(idx0: int):
+                                                            k1 = str(idx0 + 1)
+                                                            k2 = idx0 + 1
+                                                            if isinstance(old_results, dict):
+                                                                return old_results.get(k1) or old_results.get(k2) or {}
+                                                            if isinstance(old_results, list):
+                                                                return old_results[idx0] if idx0 < len(old_results) else {}
+                                                            return {}
+
+                                                        old_res_list = [_get_result_by_index(i) for i in range(n_games)]
+
+                                                        # 삭제할 인덱스(0-based) 집합
+                                                        del_set0 = {int(i) - 1 for i in _idxs2 if str(i).isdigit()}
+                                                        del_set0 = {i for i in del_set0 if 0 <= i < n_games}
+
+                                                        # ✅ 중요: 삭제 시 뒤의 코트를 앞으로 끌어올리지 않기 위해
+                                                        #   '리스트에서 제거(pop)'가 아니라 '슬롯을 삭제 표시'로 처리한다.
+                                                        #   이렇게 하면 (예) 게임2 코트2를 지워도 게임3 코트2가 게임2로 올라오지 않는다.
+                                                        new_schedule = list(_sched_now)
+                                                        new_res_list = list(old_res_list)
+                                                        for i0 in sorted(del_set0):
+                                                            try:
+                                                                _old_item = _sched_now[i0]
+                                                                _old_court = _old_item[3] if isinstance(_old_item, (list, tuple)) and len(_old_item) >= 4 else None
+                                                            except Exception:
+                                                                _old_court = None
+                                                            # '삭제' 슬롯(언팩 안전 + 인덱스 보존)
+                                                            new_schedule[i0] = ("삭제", [], [], _old_court)
+                                                            new_res_list[i0] = {}
+
+                                                        # 결과는 전체 인덱스를 유지(삭제된 슬롯은 빈 dict)
+                                                        new_results = {str(i + 1): (new_res_list[i] or {}) for i in range(n_games)}
+
+                                                        day_data["schedule"] = new_schedule
+                                                        day_data["results"] = new_results
+                                                        sessions[sel_date] = day_data
+                                                        st.session_state.sessions = sessions
+                                                        save_sessions(sessions)
+
+                                                        # ✅ 점수/사이드 위젯 키 초기화(삭제 후 인덱스 재정렬 반영)
+                                                        for i in range(1, n_games + 1):
+                                                            for k in (
+                                                                f"{sel_date}_s1_{i}",
+                                                                f"{sel_date}_s2_{i}",
+                                                                f"{sel_date}_side_radio_{i}_t1",
+                                                                f"{sel_date}_side_radio_{i}_t2",
+                                                            ):
+                                                                if k in st.session_state:
+                                                                    del st.session_state[k]
+
+                                                        # ✅ 삭제 관련 상태 초기화
+                                                        for k in (
+                                                            f"del_round_{sel_date}",
+                                                            f"del_court_{sel_date}_{del_round}",
+                                                        ):
+                                                            if k in st.session_state:
+                                                                del st.session_state[k]
+
+                                                        st.session_state["_pending_delete_game"] = None
+                                                        st.session_state["_flash_day_edit_msg"] = "✅ 선택한 게임이 삭제되었습니다."
+                                                        safe_rerun()
 
 # 2. 오늘의 요약 리포트 (자동 생성)
             # =====================================================
