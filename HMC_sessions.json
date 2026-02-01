@@ -1303,6 +1303,7 @@
       "한승현": "A조",
       "문선오": "B조"
     },
-    "schedule_view_mode": "전체"
+    "schedule_view_mode": "전체",
+    "scores_locked": true
   }
 }
