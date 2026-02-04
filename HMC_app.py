@@ -11278,7 +11278,7 @@ with tab4:
                     mvp_cnt = 0
 
                 if mvp_cnt > 0:
-                    st.write(f"- 🏅 일일 MVP: {mvp_cnt}회")
+                    st.write(f"- 일일 MVP: {mvp_cnt}회")
 
                 st.write(f"- 경기수: {rec['G']}")
                 st.write(f"- 승 / 무 / 패: {rec['W']} / {rec['D']} / {rec['L']}")
@@ -12382,4 +12382,5 @@ with tab6:
         else:
             st.info("스코어보드 앱 URL을 secrets에 `SCOREBOARD_URL`로 넣어주면 버튼이 자동으로 활성화됩니다.")
             st.code(f"?{qs}")
+
 
