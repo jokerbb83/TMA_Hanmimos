@@ -8276,6 +8276,10 @@ def render_tab_today_session(tab):
         # =========================================================
         if schedule:
             st.markdown("### ✅ 오늘 대진표 미리보기")
+            # ✅ [캡처] 오늘 대진표 미리보기 범위 마커(start/end)
+            safe_date_key2 = re.sub(r"[^0-9a-zA-Z_]+", "_", str(save_date_str))
+            capture_id_today = f"tab2_today_fixture_capture_{safe_date_key2}"
+            st.markdown(f'<div id="{capture_id_today}__start"></div>', unsafe_allow_html=True)
 
 
             # ✅ 게임(라운드) 단위 경계선 (코트 사이 X / 게임 사이 O)
@@ -8346,6 +8350,160 @@ def render_tab_today_session(tab):
 
             else:
                 _render_preview_rows(schedule, int(court_count))
+
+            st.markdown(f'<div id="{capture_id_today}__end"></div>', unsafe_allow_html=True)
+
+            # ✅ 대진표 JPEG 캡쳐 버튼(미리보기 하단 / 인당 경기수 위)
+            _club_disp_name = get_club_name(CLUB_NAME()) or CLUB_NAME()
+            _capture_title_today = f"{save_date_str} {_club_disp_name} 게임 대진"
+            components.html(
+                f"""
+                <div style="display:flex; gap:12px; margin-top:14px; align-items:center;">
+                  <button id="{capture_id_today}__save"
+                    style="flex:1; padding:10px 12px; border-radius:10px; border:1px solid rgba(0,0,0,0.15);
+                           background:white; cursor:pointer; font-weight:800;">
+                    대진표 JPEG로 저장
+                  </button>
+                  <span id="{capture_id_today}__msg" style="font-size:12px; opacity:0.7;"></span>
+                </div>
+
+                <script>
+                (function() {{
+                  const capId = {json.dumps(capture_id_today)};
+                  const fileName = "대진표_" + {json.dumps(str(save_date_str))}.replace(/[^0-9a-zA-Z_\-]+/g, "_") + ".jpg";
+                  const titleText = {json.dumps(_capture_title_today)};
+                  const p = window.parent;
+                  const pdoc = p.document;
+
+                  const msgEl  = document.getElementById(capId + "__msg");
+                  const btnSave = document.getElementById(capId + "__save");
+
+                  function setMsg(m) {{
+                    if (msgEl) msgEl.textContent = m;
+                  }}
+
+                  function ensureHtml2Canvas() {{
+                    return new Promise((resolve, reject) => {{
+                      if (p && p.html2canvas) {{
+                        resolve(p.html2canvas);
+                        return;
+                      }}
+                      const ps = pdoc.createElement("script");
+                      ps.src = "https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js";
+                      ps.onload = () => resolve(p.html2canvas);
+                      ps.onerror = reject;
+                      pdoc.head.appendChild(ps);
+                    }});
+                  }}
+
+                  if (btnSave) {{
+                    btnSave.onclick = async () => {{
+                      try {{
+                        setMsg("이미지 생성중…");
+                        const start = pdoc.getElementById(capId + "__start");
+                        const end   = pdoc.getElementById(capId + "__end");
+                        if (!start || !end) {{
+                          setMsg("캡처 마커를 찾지 못했어.");
+                          return;
+                        }}
+
+                        const startTop = start.closest('div[data-testid="stElementContainer"]')
+                                      || start.closest('div.element-container')
+                                      || start.parentElement;
+
+                        const endTop   = end.closest('div[data-testid="stElementContainer"]')
+                                      || end.closest('div.element-container')
+                                      || end.parentElement;
+
+                        let common = startTop ? startTop.parentElement : null;
+                        while (common && endTop && !common.contains(endTop)) {{
+                          common = common.parentElement;
+                        }}
+                        if (!common) {{
+                          setMsg("캡처 범위 찾기 실패");
+                          return;
+                        }}
+
+                        const kids = Array.from(common.children);
+                        const si = kids.indexOf(startTop);
+                        const ei = kids.indexOf(endTop);
+
+                        if (si < 0 || ei < 0 || ei <= si) {{
+                          setMsg("캡처 범위 인덱스 오류");
+                          return;
+                        }}
+
+                        const wrapper = pdoc.createElement("div");
+                        wrapper.style.position = "fixed";
+                        wrapper.style.left = "-100000px";
+                        wrapper.style.top = "0";
+                        wrapper.style.background = "#ffffff";
+                        const PAD = 24;
+                        wrapper.style.boxSizing = "border-box";
+                        wrapper.style.width = ((common.clientWidth || 1200) + (PAD*2)) + "px";
+                        wrapper.style.padding = PAD + "px";
+                        wrapper.style.margin = "0";
+
+                        for (let i = si + 1; i < ei; i++) {{
+                          wrapper.appendChild(kids[i].cloneNode(true));
+                        }}
+
+                        pdoc.body.appendChild(wrapper);
+
+                        const h2c = await ensureHtml2Canvas();
+                        const canvas = await h2c(wrapper, {{
+                          backgroundColor: "#ffffff",
+                          scale: 2,
+                          useCORS: true
+                        }});
+
+                        wrapper.remove();
+
+                        const headerH = 90;  // title area height
+                        const out = pdoc.createElement("canvas");
+                        out.width = canvas.width;
+                        out.height = canvas.height + headerH;
+
+                        const ctx = out.getContext("2d");
+                        ctx.fillStyle = "#ffffff";
+                        ctx.fillRect(0, 0, out.width, out.height);
+
+                        // title text (fit-to-width)
+                        ctx.fillStyle = "#111111";
+                        let fontSize = 44;
+                        ctx.textBaseline = "middle";
+                        ctx.font = "800 " + fontSize + "px Pretendard, Arial, sans-serif";
+                        while (ctx.measureText(titleText).width > out.width - 80 && fontSize > 24) {{
+                          fontSize -= 2;
+                          ctx.font = "800 " + fontSize + "px Pretendard, Arial, sans-serif";
+                        }}
+                        ctx.fillText(titleText, 40, headerH / 2);
+
+                        // captured schedule
+                        ctx.drawImage(canvas, 0, headerH);
+
+                        const url = out.toDataURL("image/jpeg", 0.95);
+
+                        const a = pdoc.createElement("a");
+                        a.href = url;
+                        a.download = fileName;
+                        pdoc.body.appendChild(a);
+                        a.click();
+                        a.remove();
+
+                        setMsg("JPEG 저장 완료!");
+                      }} catch (e) {{
+                        console.log(e);
+                        setMsg("저장 실패(콘솔 확인)");
+                      }}
+                    }};
+                  }}
+                }})();
+                </script>
+                """
+                ,
+                height=74,
+            )
 
             st.markdown("### 👤 인당 경기수")
             cnt = count_player_games(schedule)
@@ -10973,6 +11131,155 @@ with tab4:
                 avg_for = rec["score_for"] / rec["G"]
                 avg_against = rec["score_against"] / rec["G"]
 
+                # =====================================================
+                # ✅ 궁합 카드(천생연분/라이벌/천적) + 일일 MVP 횟수
+                #   - 경기수 위에 별도 카드로 표시
+                # =====================================================
+                def _best_partner_text(_with_partner):
+                    items = [
+                        (pt, rr)
+                        for pt, rr in _with_partner.items()
+                        if rr.get("G", 0) > 0 and pt != "게스트"
+                    ]
+                    if not items:
+                        return None
+
+                    def _wr(pt, rr):
+                        g = rr.get("G", 0) or 0
+                        w = rr.get("W", 0) or 0
+                        return (w / g) if g > 0 else 0.0
+
+                    best_wr = max(_wr(pt, rr) for pt, rr in items)
+                    cand = [(pt, rr) for pt, rr in items if abs(_wr(pt, rr) - best_wr) < 1e-12]
+                    # 승률 동률이면 파트너 횟수(G) 많은 사람 우선
+                    cand.sort(key=lambda x: (-int(x[1].get("G", 0)), str(x[0])))
+                    pt, rr = cand[0]
+                    g = int(rr.get("G", 0) or 0)
+                    w = int(rr.get("W", 0) or 0)
+                    wr_pct = (w / g * 100) if g > 0 else 0.0
+                    return f"{pt} (승률 {wr_pct:.1f}%, {g}경기)"
+
+                def _rival_text(_vs_opponent):
+                    items = [
+                        (op, rr)
+                        for op, rr in _vs_opponent.items()
+                        if rr.get("G", 0) > 0 and (rr.get("D", 0) or 0) > 0 and op != "게스트"
+                    ]
+                    if not items:
+                        return None
+                    max_d = max(int(rr.get("D", 0) or 0) for _, rr in items)
+                    cand = [(op, rr) for op, rr in items if int(rr.get("D", 0) or 0) == max_d]
+                    # 동률이면 경기수 많은 사람 우선 → 그래도 동률이면 이름
+                    cand.sort(key=lambda x: (-int(x[1].get("G", 0)), str(x[0])))
+                    op, rr = cand[0]
+                    g = int(rr.get("G", 0) or 0)
+                    return f"{op} ({max_d}무, {g}경기)"
+
+                def _nemesis_text(_vs_opponent):
+                    items = [
+                        (op, rr)
+                        for op, rr in _vs_opponent.items()
+                        if rr.get("G", 0) > 0 and (rr.get("L", 0) or 0) > 0 and op != "게스트"
+                    ]
+                    if not items:
+                        return None
+                    max_l = max(int(rr.get("L", 0) or 0) for _, rr in items)
+                    cand = [(op, rr) for op, rr in items if int(rr.get("L", 0) or 0) == max_l]
+                    # 동률이면 경기수 많은 사람 우선 → 그래도 동률이면 이름
+                    cand.sort(key=lambda x: (-int(x[1].get("G", 0)), str(x[0])))
+                    op, rr = cand[0]
+                    g = int(rr.get("G", 0) or 0)
+                    return f"{op} ({max_l}패, {g}경기)"
+
+                best_partner_text = _best_partner_text(with_partner)
+                rival_text = _rival_text(vs_opponent)
+                nemesis_text = _nemesis_text(vs_opponent)
+
+                if best_partner_text or rival_text or nemesis_text:
+                    st.markdown(
+                        f"""
+                        <div style="
+                            margin:0.5rem 0 0.7rem 0;
+                            padding:0.9rem 1.0rem;
+                            border-radius:12px;
+                            background:#f8fafc;
+                            border:1px solid rgba(15, 23, 42, 0.12);
+                        ">
+                          <div style="font-weight:800; font-size:0.98rem; margin-bottom:0.45rem;">
+                            💞 궁합 한눈에 보기
+                          </div>
+                          <div style="font-size:0.92rem; line-height:1.55;">
+                            <div>💘 천생연분: <b>{best_partner_text or "데이터 없음"}</b></div>
+                            <div>🕊️ 라이벌: <b>{rival_text or "데이터 없음"}</b></div>
+                            <div>🦂 천적: <b>{nemesis_text or "데이터 없음"}</b></div>
+                          </div>
+                        </div>
+                        """,
+                        unsafe_allow_html=True,
+                    )
+
+                # ✅ 일일 MVP 횟수(기간/월 선택 반영) — 없으면 숨김
+                def _daily_mvp_for_date(date_key: str):
+                    _recs = defaultdict(lambda: {"G": 0, "W": 0, "D": 0, "L": 0, "score_for": 0, "score_against": 0})
+
+                    def _upd(players, res, sf, sa):
+                        for n in players:
+                            if n == "게스트":
+                                continue
+                            rr = _recs[n]
+                            rr["G"] += 1
+                            rr[res] += 1
+                            rr["score_for"] += int(sf or 0)
+                            rr["score_against"] += int(sa or 0)
+
+                    for _d, _idx, _g in iter_games(sessions, include_special=False):
+                        if _d != date_key:
+                            continue
+                        _t1, _t2 = _g["t1"], _g["t2"]
+                        _s1, _s2 = _g["score1"], _g["score2"]
+                        _r = calc_result(_s1, _s2)
+                        if _r is None:
+                            continue
+
+                        if _r == "W":
+                            _upd(_t1, "W", _s1, _s2)
+                            _upd(_t2, "L", _s2, _s1)
+                        elif _r == "L":
+                            _upd(_t1, "L", _s1, _s2)
+                            _upd(_t2, "W", _s2, _s1)
+                        else:
+                            _upd(_t1, "D", _s1, _s2)
+                            _upd(_t2, "D", _s2, _s1)
+
+                    if not _recs:
+                        return None
+
+                    best_w = max(rr.get("W", 0) for rr in _recs.values())
+                    cand = [n for n, rr in _recs.items() if rr.get("G", 0) > 0 and rr.get("W", 0) == best_w]
+                    if not cand:
+                        return None
+
+                    def _diff(n):
+                        rr = _recs[n]
+                        return int(rr.get("score_for", 0) - rr.get("score_against", 0))
+
+                    best_diff = max(_diff(n) for n in cand)
+                    cand2 = [n for n in cand if _diff(n) == best_diff]
+                    return sorted(cand2, key=lambda x: str(x))[0]
+
+                mvp_cnt = 0
+                try:
+                    for _d in sorted(player_days):
+                        if month_key and (not str(_d).startswith(month_key)):
+                            continue
+                        if _daily_mvp_for_date(str(_d)) == sel_player:
+                            mvp_cnt += 1
+                except Exception:
+                    mvp_cnt = 0
+
+                if mvp_cnt > 0:
+                    st.write(f"- 🏅 일일 MVP: {mvp_cnt}회")
+
                 st.write(f"- 경기수: {rec['G']}")
                 st.write(f"- 승 / 무 / 패: {rec['W']} / {rec['D']} / {rec['L']}")
                 st.write(f"- 승률: {win_rate:.1f}%")
@@ -11877,6 +12184,21 @@ with tab5:
                 else:
                     partner_line = "데이터 부족 (복식 경기 없음)"
 
+                # 🕊️ 무승부왕 — 무승부(D) 최다(월간)
+                peace_line = "데이터 부족"
+                _peace_candidates = [
+                    (name, r)
+                    for name, r in recs.items()
+                    if r.get("G", 0) > 0 and (not is_guest_name(name, roster))
+                ]
+                if _peace_candidates:
+                    max_d = max(r.get("D", 0) for _, r in _peace_candidates)
+                    if max_d > 0:
+                        _cand = [(n, r) for n, r in _peace_candidates if r.get("D", 0) == max_d]
+                        # 동률이면 경기수 많은 사람 우선 → 그래도 동률이면 이름
+                        _cand.sort(key=lambda x: (-int(x[1].get("G", 0)), str(x[0])))
+                        peace_line = f"{_cand[0][0]} ({max_d}무)"
+
                 # 👑 출석왕 — recs(순위표)와 동일 기준(출석 날짜 set)
                 attendance_count = {
                     p: len(r["days"])
@@ -12009,6 +12331,7 @@ with tab5:
                         <ul style="padding-left:1.1rem;margin:0;font-size:0.9rem;">
                             <li>🏆 MVP&nbsp;:&nbsp;{mvp_line}</li>
                             <li>🎯 격차왕&nbsp;:&nbsp;{diff_line}</li>
+                            <li>🕊️ 무승부왕&nbsp;:&nbsp;{peace_line}</li>
                             <li>🤝 우정왕&nbsp;:&nbsp;{partner_line}</li>
                             <li>👑 출석왕&nbsp;:&nbsp;{attendance_line}</li>
                             <li>🔥 연승왕&nbsp;:&nbsp;{streak_line}</li>
