@@ -11206,11 +11206,11 @@ with tab4:
                             border:1px solid rgba(15, 23, 42, 0.12);
                         ">
                           <div style="font-weight:800; font-size:0.98rem; margin-bottom:0.45rem;">
-                            💞 궁합 한눈에 보기
+                            🤝 매치업 하이라이트
                           </div>
                           <div style="font-size:0.92rem; line-height:1.55;">
-                            <div>💘 천생연분: <b>{best_partner_text or "데이터 없음"}</b></div>
-                            <div>🕊️ 라이벌: <b>{rival_text or "데이터 없음"}</b></div>
+                            <div>💍 천생연분: <b>{best_partner_text or "데이터 없음"}</b></div>
+                            <div>⚖️ 라이벌: <b>{rival_text or "데이터 없음"}</b></div>
                             <div>🦂 천적: <b>{nemesis_text or "데이터 없음"}</b></div>
                           </div>
                         </div>
@@ -12331,7 +12331,7 @@ with tab5:
                         <ul style="padding-left:1.1rem;margin:0;font-size:0.9rem;">
                             <li>🏆 MVP&nbsp;:&nbsp;{mvp_line}</li>
                             <li>🎯 격차왕&nbsp;:&nbsp;{diff_line}</li>
-                            <li>🕊️ 무승부왕&nbsp;:&nbsp;{peace_line}</li>
+                            <li>🕊️ 평화주의자&nbsp;:&nbsp;{peace_line}</li>
                             <li>🤝 우정왕&nbsp;:&nbsp;{partner_line}</li>
                             <li>👑 출석왕&nbsp;:&nbsp;{attendance_line}</li>
                             <li>🔥 연승왕&nbsp;:&nbsp;{streak_line}</li>
@@ -12382,3 +12382,4 @@ with tab6:
         else:
             st.info("스코어보드 앱 URL을 secrets에 `SCOREBOARD_URL`로 넣어주면 버튼이 자동으로 활성화됩니다.")
             st.code(f"?{qs}")
+
