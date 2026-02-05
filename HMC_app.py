@@ -654,6 +654,7 @@ section.main{
 .msa-prob{display:inline-block; margin:0 4px; font-weight:900; font-size:0.78rem;}
 .msa-prob-hi{color:#dc2626;}
 .msa-prob-lo{color:#6b7280;}
+.msa-prob-na{color:#9ca3af;}
 body.msa-hide-prob .msa-prob{display:none !important;}
 
 .msc-chip{display:inline-block; padding:2px 6px; border-radius:999px; font-size:0.78rem; font-weight:800; line-height:1;}
@@ -3529,78 +3530,156 @@ def build_prediction_stats_cache(_sessions: dict, _roster_by_name_keys: tuple):
 
     return {"player": player, "pair": pair, "vs": vs, "team": team}
 
-def estimate_match_win_prob(team1: tuple, team2: tuple, roster_by_name: dict, sessions: dict) -> float:
-    """team1이 이길 확률(0~1)을 추정한다."""
+def estimate_match_win_prob(team1: tuple, team2: tuple, roster_by_name: dict, sessions: dict):
+    """team1이 이길 확률(0~1)을 추정한다.
+    - 데이터가 거의 없으면 None 반환(=정보부족)
+    - 가중치 기반 복합 계산:
+        상대 전적 2.5 / 파트너 궁합 2.0 / NTRP 1.5 / 개인 통산 1.0
+    - NTRP 0.5 차이 ≈ 15% 승률 차이(확률 공간에서 선형 근사, 클램프)
+    - 데이터 우선순위:
+        (A) 팀vs팀 기록이 충분하면 최우선 반영
+        (B) 그 외는 가능한 항목만 가중치 합산
+    """
     # cache: roster key 목록만 넣어서, roster 변경에 따라 무효화
     keys = tuple(sorted(list(roster_by_name.keys()))) if isinstance(roster_by_name, dict) else tuple()
-    stats = build_prediction_stats_cache(sessions, keys)
+    stats = build_prediction_stats_cache(sessions or {}, keys)
 
-    player = stats["player"]
-    pair = stats["pair"]
-    vs = stats["vs"]
-    team = stats["team"]
+    player = stats.get("player", {})
+    pair = stats.get("pair", {})
+    vs = stats.get("vs", {})
+    team = stats.get("team", {})
+
+    def _rec_games(rec: dict) -> int:
+        if not rec:
+            return 0
+        return int((rec.get("W", 0) or 0) + (rec.get("D", 0) or 0) + (rec.get("L", 0) or 0))
 
     def p_wr(p):
         rec = player.get(p) or {"W": 0, "D": 0, "L": 0}
-        return _bayes_wr(rec["W"], rec["D"], rec["L"], prior_games=10.0)
+        G = _rec_games(rec)
+        if G <= 0:
+            return None, 0
+        return float(_bayes_wr(rec["W"], rec["D"], rec["L"], prior_games=10.0)), G
 
     def pair_wr(a, b):
         k = tuple(sorted([a, b]))
         rec = pair.get(k) or {"W": 0, "D": 0, "L": 0}
-        return _bayes_wr(rec["W"], rec["D"], rec["L"], prior_games=6.0)
+        G = _rec_games(rec)
+        if G <= 0:
+            return None, 0
+        return float(_bayes_wr(rec["W"], rec["D"], rec["L"], prior_games=6.0)), G
 
     def vs_wr(a, b):
         rec = vs.get((a, b)) or {"W": 0, "D": 0, "L": 0}
-        return _bayes_wr(rec["W"], rec["D"], rec["L"], prior_games=6.0)
+        G = _rec_games(rec)
+        if G <= 0:
+            return None, 0
+        return float(_bayes_wr(rec["W"], rec["D"], rec["L"], prior_games=6.0)), G
 
-    # 0) exact team-vs-team 기록이 충분하면 우선 반영
+    # -------------------------------------------------
+    # (A) 팀 vs 팀 기록이 있으면 최우선 (최소 2경기 이상 권장)
+    # -------------------------------------------------
     if len(team1) == 2 and len(team2) == 2:
         k = (tuple(sorted(team1)), tuple(sorted(team2)))
         rec = team.get(k)
         if rec:
-            G = rec["W"] + rec["D"] + rec["L"]
-            if G >= 3:
-                base = _bayes_wr(rec["W"], rec["D"], rec["L"], prior_games=2.0)
-                # 너무 확신하지 않게 완만하게 클램프
-                return max(0.08, min(0.92, float(base)))
+            G = _rec_games(rec)
+            if G >= 2:
+                base = float(_bayes_wr(rec["W"], rec["D"], rec["L"], prior_games=2.0))
+                return max(0.06, min(0.94, base))
 
-    # 1) NTRP 기반 강도
-    n1 = sum(_ntrp_of(p, roster_by_name) for p in team1) / max(1, len(team1))
-    n2 = sum(_ntrp_of(p, roster_by_name) for p in team2) / max(1, len(team2))
-    rating_diff = (n1 - n2)  # 보통 -1~+1
+    # -------------------------------------------------
+    # (B) 가용 데이터만 복합 가중치 계산
+    # -------------------------------------------------
+    components = []  # (p_team1_win, weight)
 
-    # 2) 개인 전체 승률
-    o1 = sum(p_wr(p) for p in team1) / max(1, len(team1))
-    o2 = sum(p_wr(p) for p in team2) / max(1, len(team2))
+    # 1) 상대 전적(개인 vs 개인) - 가장 중요
+    vv = []
+    vg = 0
+    for a in team1:
+        for b in team2:
+            p, g = vs_wr(a, b)
+            if p is not None:
+                vv.append(p)
+                vg += g
+    if vv:
+        p_vs = float(sum(vv) / len(vv))
+        components.append((p_vs, 2.5))
 
-    # 3) 파트너 시너지(복식)
-    s1 = pair_wr(team1[0], team1[1]) if len(team1) == 2 else o1
-    s2 = pair_wr(team2[0], team2[1]) if len(team2) == 2 else o2
+    # 2) 파트너 궁합(복식)
+    if len(team1) == 2 and len(team2) == 2:
+        p1, g1 = pair_wr(team1[0], team1[1])
+        p2, g2 = pair_wr(team2[0], team2[1])
+        if p1 is not None and p2 is not None:
+            # 궁합은 '상대 비교'로 변환
+            p_pair = 0.5 + ((p1 - 0.5) - (p2 - 0.5))  # 0.5 중심의 차이 반영
+            p_pair = max(0.05, min(0.95, float(p_pair)))
+            components.append((p_pair, 2.0))
+        elif p1 is not None and p2 is None:
+            # 한쪽만 기록 있으면 그쪽을 약간 반영(과확신 방지)
+            p_pair = max(0.10, min(0.90, float(p1)))
+            components.append((p_pair, 1.0))
+        elif p2 is not None and p1 is None:
+            p_pair = 1.0 - max(0.10, min(0.90, float(p2)))
+            components.append((p_pair, 1.0))
 
-    # 4) 상대별 전적(개인 vs 개인 평균)
-    h1 = 0.5
-    h2 = 0.5
-    try:
-        vv = []
-        for a in team1:
-            for b in team2:
-                vv.append(vs_wr(a, b))
-        if vv:
-            h1 = sum(vv) / len(vv)
-            h2 = 1.0 - (sum(vv) / len(vv) - 0.5)  # 대칭 근사
-    except Exception:
-        pass
+    # 3) NTRP 기반 (팀 평균 비교, 0.5 차이=15%p)
+    def _get_ntrp(name: str):
+        try:
+            return _safe_float((roster_by_name.get(name) or {}).get("ntrp", None))
+        except Exception:
+            return None
 
-    # logit 합성 (합리적 가중치)
-    logit = 0.0
-    logit += 1.05 * rating_diff              # NTRP 영향
-    logit += 2.0 * ((o1 - 0.5) - (o2 - 0.5)) # 개인 승률 영향
-    logit += 1.4 * ((s1 - 0.5) - (s2 - 0.5)) # 파트너 시너지
-    logit += 1.2 * ((h1 - 0.5) - (h2 - 0.5)) # 상대별 전적
+    n1_list = [v for v in (_get_ntrp(p) for p in team1) if v is not None]
+    n2_list = [v for v in (_get_ntrp(p) for p in team2) if v is not None]
+    if n1_list and n2_list:
+        n1 = float(sum(n1_list) / len(n1_list))
+        n2 = float(sum(n2_list) / len(n2_list))
+        diff = n1 - n2
+        # 0.5 diff -> 0.15 prob shift => 1.0 diff -> 0.30 shift
+        p_ntrp = 0.5 + (0.30 * diff)
+        p_ntrp = max(0.05, min(0.95, float(p_ntrp)))
+        components.append((p_ntrp, 1.5))
 
-    p = float(_sigmoid(logit))
-    # 너무 과한 확신 방지
-    p = max(0.06, min(0.94, p))
+    # 4) 개인 통산 승률
+    p1s = []
+    p2s = []
+    for p in team1:
+        pv, g = p_wr(p)
+        if pv is not None:
+            p1s.append(pv)
+    for p in team2:
+        pv, g = p_wr(p)
+        if pv is not None:
+            p2s.append(pv)
+
+    if p1s and p2s:
+        o1 = float(sum(p1s) / len(p1s))
+        o2 = float(sum(p2s) / len(p2s))
+        p_overall = 0.5 + ((o1 - 0.5) - (o2 - 0.5))
+        p_overall = max(0.05, min(0.95, float(p_overall)))
+        components.append((p_overall, 1.0))
+    elif p1s and (not p2s):
+        o1 = float(sum(p1s) / len(p1s))
+        components.append((max(0.10, min(0.90, o1)), 0.6))
+    elif p2s and (not p1s):
+        o2 = float(sum(p2s) / len(p2s))
+        components.append((1.0 - max(0.10, min(0.90, o2)), 0.6))
+
+    # -------------------------------------------------
+    # 정보부족 판정
+    #  - (기록 기반 component 없음) AND (NTRP도 양쪽 다 없음) => None
+    # -------------------------------------------------
+    if not components:
+        return None
+
+    # 가중치 합산(확률 공간에서 0.5 중심 선형 결합)
+    total_w = sum(w for _, w in components)
+    score = sum(w * (p - 0.5) for p, w in components)
+    p = 0.5 + (score / total_w)
+
+    # 과확신 방지 클램프
+    p = max(0.06, min(0.94, float(p)))
     return p
 def update_player_record(rec, result):
     if result == "W":
@@ -8536,21 +8615,25 @@ def render_tab_today_session(tab):
                     # ✅ 예상 승률 계산 (team1 기준)
                     prob1 = None
                     try:
-                        prob1 = estimate_match_win_prob(tuple(t1), tuple(t2), roster_by_name, st.session_state.sessions)
+                        prob1 = estimate_match_win_prob(tuple(t1), tuple(t2), roster_by_name, sessions)
                     except Exception:
                         prob1 = None
+
+                    # prob1=None 이면 데이터 부족(기록/NTRP 모두 빈약) → '정보부족' 표시
                     if prob1 is None:
-                        prob1 = 0.5
+                        prob_html = "<span class='msa-prob msa-prob-na'>(정보부족)</span>"
+                        prob1_html = prob_html
+                        prob2_html = ""
+                    else:
+                        pct1 = int(round(float(prob1) * 100))
+                        pct1 = max(0, min(100, pct1))
+                        pct2 = 100 - pct1
 
-                    pct1 = int(round(float(prob1) * 100))
-                    pct1 = max(0, min(100, pct1))
-                    pct2 = 100 - pct1
+                        cls1 = "msa-prob-hi" if pct1 >= pct2 else "msa-prob-lo"
+                        cls2 = "msa-prob-hi" if pct2 > pct1 else "msa-prob-lo"
 
-                    cls1 = "msa-prob-hi" if pct1 >= pct2 else "msa-prob-lo"
-                    cls2 = "msa-prob-hi" if pct2 > pct1 else "msa-prob-lo"
-
-                    prob1_html = f"<span class='msa-prob {cls1}'>({pct1}%)</span>"
-                    prob2_html = f"<span class='msa-prob {cls2}'>({pct2}%)</span>"
+                        prob1_html = f"<span class='msa-prob {cls1}'>({pct1}%)</span>"
+                        prob2_html = f"<span class='msa-prob {cls2}'>({pct2}%)</span>"
 
 
                     st.markdown(
