@@ -651,6 +651,11 @@ section.main{
 .msc-gamehead{display:flex; align-items:center; justify-content:flex-start; gap:10px; flex-wrap:wrap;}
 .msc-chip-wrap{display:flex; align-items:center; justify-content:flex-start; gap:6px; flex-wrap:wrap;}
 .msc-vs{display:inline-block; margin:0 6px; font-weight:900; font-size:0.78rem; color:#6b7280;}
+.msa-prob{display:inline-block; margin:0 4px; font-weight:900; font-size:0.78rem;}
+.msa-prob-hi{color:#dc2626;}
+.msa-prob-lo{color:#6b7280;}
+body.msa-hide-prob .msa-prob{display:none !important;}
+
 .msc-chip{display:inline-block; padding:2px 6px; border-radius:999px; font-size:0.78rem; font-weight:800; line-height:1;}
 .msc-chip-m{background:#dbeafe; color:#1e40af;}
 .msc-chip-f{background:#ffe4e6; color:#be123c;}
@@ -3368,6 +3373,235 @@ def calc_result(score1, score2):
     return "D"
 
 
+
+# =========================================================
+# ✅ 예상 승률(대진표 미리보기용)
+#   - 상대별 전적(개인 vs 개인)
+#   - 파트너와의 승률(복식)
+#   - 개인 최근/전체 승률(스무딩)
+#   - NTRP(있으면) 기반 기본 강도
+# =========================================================
+
+def _safe_float(v):
+    try:
+        if v in (None, "", "모름"):
+            return None
+        return float(v)
+    except Exception:
+        return None
+
+def _ntrp_of(name: str, roster_by_name: dict, default: float = 3.0) -> float:
+    v = _safe_float(roster_by_name.get(name, {}).get("ntrp", None))
+    return float(v) if v is not None else float(default)
+
+def _is_valid_stat_name(name: str, roster_by_name: dict) -> bool:
+    nm = str(name or "").strip()
+    if not nm:
+        return False
+    if nm == "게스트":
+        return False
+    # 교류전 상대(등록 roster 밖)는 통계/예측에서 제외(노이즈 방지)
+    if roster_by_name and (nm not in roster_by_name):
+        return False
+    return True
+
+def _bayes_wr(W: int, D: int, L: int, prior_games: float = 6.0, prior_wr: float = 0.5) -> float:
+    # 무승부는 0.5승으로 처리
+    G = max(0, int(W) + int(D) + int(L))
+    win_equiv = float(W) + 0.5 * float(D)
+    return (win_equiv + prior_games * prior_wr) / (G + prior_games) if (G + prior_games) > 0 else 0.5
+
+def _sigmoid(x: float) -> float:
+    try:
+        return 1.0 / (1.0 + math.exp(-x))
+    except Exception:
+        return 0.5
+
+@st.cache_data(show_spinner=False)
+def build_prediction_stats_cache(_sessions: dict, _roster_by_name_keys: tuple):
+    """세션 결과로부터 예측용 통계를 만든다.
+    cache key를 안정화하기 위해 roster_by_name는 '키 목록'만 받아서 캐시한다.
+    """
+    # NOTE: roster_by_name_keys는 캐시 무효화용(선수 구성 변경 감지)
+    player = defaultdict(lambda: {"W": 0, "D": 0, "L": 0})
+    pair = defaultdict(lambda: {"W": 0, "D": 0, "L": 0})      # (a,b) as partners
+    vs = defaultdict(lambda: {"W": 0, "D": 0, "L": 0})        # (p, opp) when opposite
+    team = defaultdict(lambda: {"W": 0, "D": 0, "L": 0})      # (pairA, pairB) oriented by left team
+
+    roster_set = set(_roster_by_name_keys or [])
+    def _valid(nm: str) -> bool:
+        nm = str(nm or '').strip()
+        if not nm or nm == '게스트':
+            return False
+        # roster 키 목록이 있으면(정상) roster 밖 선수는 제외
+        return (nm in roster_set) if roster_set else True
+
+
+    if not isinstance(_sessions, dict):
+        return {"player": player, "pair": pair, "vs": vs, "team": team}
+
+    for _d, day_data in (_sessions or {}).items():
+        if not isinstance(day_data, dict):
+            continue
+        sched = day_data.get("schedule", []) or []
+        results = day_data.get("results", {}) or {}
+        if not isinstance(sched, list) or not isinstance(results, dict):
+            continue
+
+        for idx, (gtype, t1, t2, court) in enumerate(sched, start=1):
+            res = results.get(str(idx)) or results.get(idx) or {}
+            if not isinstance(res, dict):
+                continue
+            s1 = res.get("t1")
+            s2 = res.get("t2")
+            r = calc_result(s1, s2)
+            if r is None:
+                continue
+
+            # 유효 선수만 통계에 반영
+            t1v = [p for p in (t1 or []) if _valid(p)]
+            t2v = [p for p in (t2 or []) if _valid(p)]
+            if not t1v or not t2v:
+                continue
+
+            if r == "W":
+                win_side, lose_side = t1v, t2v
+                side_flag = "L"
+            elif r == "L":
+                win_side, lose_side = t2v, t1v
+                side_flag = "R"
+            else:
+                win_side = lose_side = None
+                side_flag = "D"
+
+            # 개인 승/무/패
+            if side_flag == "L":
+                for p in t1v:
+                    player[p]["W"] += 1
+                for p in t2v:
+                    player[p]["L"] += 1
+            elif side_flag == "R":
+                for p in t2v:
+                    player[p]["W"] += 1
+                for p in t1v:
+                    player[p]["L"] += 1
+            else:
+                for p in t1v + t2v:
+                    player[p]["D"] += 1
+
+            # 복식 파트너/팀 매치업 통계
+            if str(gtype) == "복식" and len(t1v) == 2 and len(t2v) == 2:
+                p1 = tuple(sorted([t1v[0], t1v[1]]))
+                p2 = tuple(sorted([t2v[0], t2v[1]]))
+
+                # 파트너 승률
+                if side_flag == "L":
+                    pair[p1]["W"] += 1
+                    pair[p2]["L"] += 1
+                elif side_flag == "R":
+                    pair[p2]["W"] += 1
+                    pair[p1]["L"] += 1
+                else:
+                    pair[p1]["D"] += 1
+                    pair[p2]["D"] += 1
+
+                # 팀 vs 팀(왼쪽 기준)
+                key = (p1, p2)
+                if side_flag == "L":
+                    team[key]["W"] += 1
+                elif side_flag == "R":
+                    team[key]["L"] += 1
+                else:
+                    team[key]["D"] += 1
+
+            # 상대별(개인 vs 개인)
+            for p in t1v:
+                for o in t2v:
+                    if side_flag == "L":
+                        vs[(p, o)]["W"] += 1
+                        vs[(o, p)]["L"] += 1
+                    elif side_flag == "R":
+                        vs[(p, o)]["L"] += 1
+                        vs[(o, p)]["W"] += 1
+                    else:
+                        vs[(p, o)]["D"] += 1
+                        vs[(o, p)]["D"] += 1
+
+    return {"player": player, "pair": pair, "vs": vs, "team": team}
+
+def estimate_match_win_prob(team1: tuple, team2: tuple, roster_by_name: dict, sessions: dict) -> float:
+    """team1이 이길 확률(0~1)을 추정한다."""
+    # cache: roster key 목록만 넣어서, roster 변경에 따라 무효화
+    keys = tuple(sorted(list(roster_by_name.keys()))) if isinstance(roster_by_name, dict) else tuple()
+    stats = build_prediction_stats_cache(sessions, keys)
+
+    player = stats["player"]
+    pair = stats["pair"]
+    vs = stats["vs"]
+    team = stats["team"]
+
+    def p_wr(p):
+        rec = player.get(p) or {"W": 0, "D": 0, "L": 0}
+        return _bayes_wr(rec["W"], rec["D"], rec["L"], prior_games=10.0)
+
+    def pair_wr(a, b):
+        k = tuple(sorted([a, b]))
+        rec = pair.get(k) or {"W": 0, "D": 0, "L": 0}
+        return _bayes_wr(rec["W"], rec["D"], rec["L"], prior_games=6.0)
+
+    def vs_wr(a, b):
+        rec = vs.get((a, b)) or {"W": 0, "D": 0, "L": 0}
+        return _bayes_wr(rec["W"], rec["D"], rec["L"], prior_games=6.0)
+
+    # 0) exact team-vs-team 기록이 충분하면 우선 반영
+    if len(team1) == 2 and len(team2) == 2:
+        k = (tuple(sorted(team1)), tuple(sorted(team2)))
+        rec = team.get(k)
+        if rec:
+            G = rec["W"] + rec["D"] + rec["L"]
+            if G >= 3:
+                base = _bayes_wr(rec["W"], rec["D"], rec["L"], prior_games=2.0)
+                # 너무 확신하지 않게 완만하게 클램프
+                return max(0.08, min(0.92, float(base)))
+
+    # 1) NTRP 기반 강도
+    n1 = sum(_ntrp_of(p, roster_by_name) for p in team1) / max(1, len(team1))
+    n2 = sum(_ntrp_of(p, roster_by_name) for p in team2) / max(1, len(team2))
+    rating_diff = (n1 - n2)  # 보통 -1~+1
+
+    # 2) 개인 전체 승률
+    o1 = sum(p_wr(p) for p in team1) / max(1, len(team1))
+    o2 = sum(p_wr(p) for p in team2) / max(1, len(team2))
+
+    # 3) 파트너 시너지(복식)
+    s1 = pair_wr(team1[0], team1[1]) if len(team1) == 2 else o1
+    s2 = pair_wr(team2[0], team2[1]) if len(team2) == 2 else o2
+
+    # 4) 상대별 전적(개인 vs 개인 평균)
+    h1 = 0.5
+    h2 = 0.5
+    try:
+        vv = []
+        for a in team1:
+            for b in team2:
+                vv.append(vs_wr(a, b))
+        if vv:
+            h1 = sum(vv) / len(vv)
+            h2 = 1.0 - (sum(vv) / len(vv) - 0.5)  # 대칭 근사
+    except Exception:
+        pass
+
+    # logit 합성 (합리적 가중치)
+    logit = 0.0
+    logit += 1.05 * rating_diff              # NTRP 영향
+    logit += 2.0 * ((o1 - 0.5) - (o2 - 0.5)) # 개인 승률 영향
+    logit += 1.4 * ((s1 - 0.5) - (s2 - 0.5)) # 파트너 시너지
+    logit += 1.2 * ((h1 - 0.5) - (h2 - 0.5)) # 상대별 전적
+
+    p = float(_sigmoid(logit))
+    # 너무 과한 확신 방지
+    p = max(0.06, min(0.94, p))
+    return p
 def update_player_record(rec, result):
     if result == "W":
         rec["W"] += 1
@@ -8299,13 +8533,32 @@ def render_tab_today_session(tab):
                 for i, (gt, t1, t2, court) in enumerate(_sched_list, start=1):
                     t1_badges = "".join(render_name_badge(n, roster_by_name) for n in t1)
                     t2_badges = "".join(render_name_badge(n, roster_by_name) for n in t2)
+                    # ✅ 예상 승률 계산 (team1 기준)
+                    prob1 = None
+                    try:
+                        prob1 = estimate_match_win_prob(tuple(t1), tuple(t2), roster_by_name, st.session_state.sessions)
+                    except Exception:
+                        prob1 = None
+                    if prob1 is None:
+                        prob1 = 0.5
+
+                    pct1 = int(round(float(prob1) * 100))
+                    pct1 = max(0, min(100, pct1))
+                    pct2 = 100 - pct1
+
+                    cls1 = "msa-prob-hi" if pct1 >= pct2 else "msa-prob-lo"
+                    cls2 = "msa-prob-hi" if pct2 > pct1 else "msa-prob-lo"
+
+                    prob1_html = f"<span class='msa-prob {cls1}'>({pct1}%)</span>"
+                    prob2_html = f"<span class='msa-prob {cls2}'>({pct2}%)</span>"
+
 
                     st.markdown(
                         f"""
                         <div class="msa-game-row">
                           <div class="msa-game-meta">#{i} · 코트 {court} · {gt}</div>
                           <div class="msa-game-line">
-                            <b>{t1_badges}</b> <span style="margin:0 6px;font-weight:800;">vs</span> <b>{t2_badges}</b>
+                            <b>{t1_badges}</b> {prob1_html} <span class="msc-vs">vs</span> {prob2_html} <b>{t2_badges}</b>
                           </div>
                         </div>
                         """,
@@ -8364,6 +8617,12 @@ def render_tab_today_session(tab):
                            background:white; cursor:pointer; font-weight:800;">
                     대진표 JPEG로 저장
                   </button>
+
+                  <label style="display:flex; align-items:center; gap:6px; font-size:12px; font-weight:800; user-select:none; white-space:nowrap;">
+                    <input type="checkbox" id="{capture_id_today}__prob" checked style="transform:scale(1.05);"/>
+                    확률 표시
+                  </label>
+
                   <span id="{capture_id_today}__msg" style="font-size:12px; opacity:0.7;"></span>
                 </div>
 
@@ -8377,6 +8636,23 @@ def render_tab_today_session(tab):
 
                   const msgEl  = document.getElementById(capId + "__msg");
                   const btnSave = document.getElementById(capId + "__save");
+
+                  const chkProb = document.getElementById(capId + "__prob");
+
+                  function applyProbVisibility() {{
+                    try{{
+                      const on = chkProb ? !!chkProb.checked : true;
+                      const body = pdoc && pdoc.body;
+                      if (!body) return;
+                      if (on) body.classList.remove('msa-hide-prob');
+                      else body.classList.add('msa-hide-prob');
+                    }}catch(e){{}}
+                  }}
+                  if (chkProb){{
+                    chkProb.addEventListener('change', applyProbVisibility);
+                  }}
+                  // 초기 상태 반영
+                  applyProbVisibility();
 
                   function setMsg(m) {{
                     if (msgEl) msgEl.textContent = m;
@@ -12382,5 +12658,4 @@ with tab6:
         else:
             st.info("스코어보드 앱 URL을 secrets에 `SCOREBOARD_URL`로 넣어주면 버튼이 자동으로 활성화됩니다.")
             st.code(f"?{qs}")
-
 
