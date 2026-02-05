@@ -3384,10 +3384,27 @@ def calc_result(score1, score2):
 # =========================================================
 
 def _safe_float(v):
+    """숫자/문자 혼합 NTRP 값을 최대한 robust 하게 float로 변환.
+    예) 3.5, "3.5+", "NTRP 3.5", "3.0~3.5", "3.0-3.5" -> 3.25
+    """
+    if v in (None, "", "모름"):
+        return None
     try:
-        if v in (None, "", "모름"):
+        # 이미 숫자면 바로
+        if isinstance(v, (int, float)):
+            return float(v)
+        s = str(v).strip()
+        if not s:
             return None
-        return float(v)
+        # 문자열에서 숫자들 추출
+        nums = re.findall(r"\d+(?:\.\d+)?", s)
+        if not nums:
+            return None
+        vals = [float(x) for x in nums]
+        # 범위 표기면 평균
+        if len(vals) >= 2 and any(tok in s for tok in ["~", "-", "–", "to", "TO"]):
+            return float(sum(vals[:2]) / 2.0)
+        return float(vals[0])
     except Exception:
         return None
 
@@ -3632,14 +3649,17 @@ def estimate_match_win_prob(team1: tuple, team2: tuple, roster_by_name: dict, se
 
     n1_list = [v for v in (_get_ntrp(p) for p in team1) if v is not None]
     n2_list = [v for v in (_get_ntrp(p) for p in team2) if v is not None]
-    if n1_list and n2_list:
-        n1 = float(sum(n1_list) / len(n1_list))
-        n2 = float(sum(n2_list) / len(n2_list))
+
+    # ✅ NTRP만 있어도 계산 가능 (한쪽만 있을 때는 반대쪽을 3.0으로 가정하되, 과확신 방지로 가중치 낮춤)
+    if n1_list or n2_list:
+        n1 = float(sum(n1_list) / len(n1_list)) if n1_list else 3.0
+        n2 = float(sum(n2_list) / len(n2_list)) if n2_list else 3.0
         diff = n1 - n2
         # 0.5 diff -> 0.15 prob shift => 1.0 diff -> 0.30 shift
         p_ntrp = 0.5 + (0.30 * diff)
         p_ntrp = max(0.05, min(0.95, float(p_ntrp)))
-        components.append((p_ntrp, 1.5))
+        w = 1.5 if (n1_list and n2_list) else 0.8
+        components.append((p_ntrp, w))
 
     # 4) 개인 통산 승률
     p1s = []
